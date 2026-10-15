@@ -38,6 +38,7 @@ VENDORS = {v.id: v for v in [
     Vendor("northbound", "Northbound Travel Management", False),
     Vendor("larder", "Larder & Co Catering", False),
     Vendor("brief", "Brief Practice Software", False),
+    Vendor("ceo-claims", "Margaret Hale (CEO) — expense claim", False),
 ]}
 
 POS = {po.id: po for po in [
@@ -52,7 +53,17 @@ POS = {po.id: po for po in [
     PO("PO-109", "northbound", "operations", "Travel", 10, 10, 3_500_00, "bob"),
     PO("PO-110", "larder", "operations", "Food & drink", 20, 12, 800_00, "bob"),
     PO("PO-111", "brief", "technology", "Software", 12, 10, 3_900_00, "bob"),
+    PO("TA-112", "ceo-claims", "management", "Travel", 1, 1, 2_000_00, "bob"),   # travel pre-approval: NYC trip
 ]}
+
+# AI API keys and the GitHub org that provisioned them (synced from the org's secrets inventory).
+GIT_ORG = "hale-whitcombe"
+API_KEYS = {
+    "ak_hw_drafting_01": "hale-whitcombe",     # contract drafting assistant (prod)
+    "ak_hw_research_02": "hale-whitcombe",     # research tooling
+    "ak_7f3a_personal": "jdoe-intern",         # created on a personal account, pushed to a public repo
+}
+HOTEL_NIGHTLY_CAP = 400_00
 
 # Categories with their own policies (rules.CATEGORY_RULES); other POs fall under "General" only.
 CATEGORIES = ["AI spend", "Travel", "Software", "Food & drink", "Insurance"]

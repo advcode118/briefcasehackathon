@@ -1,0 +1,11 @@
+{
+  "invoice_id": "EXP-MH-0193",
+  "vendor_id": "ceo-claims",
+  "amount": 114000,
+  "currency": "gbp",
+  "po_id": "TA-112",
+  "nights": 3,
+  "city": "New York",
+  "body": "Expense claim — Margaret Hale (CEO). Hotel: The Greenwich Street Hotel, New York, 3 nights (client meetings, Atlas v Brennan). £1,140.00 incl. taxes. Receipt attached.",
+  "day": 29
+}

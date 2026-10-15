@@ -391,7 +391,7 @@ function hasInjection(text) {
 
 const J = {
   payments: [], summary: null, policy: null, prove: null,
-  filter: 'all', open: new Set(), showPassed: new Set(), showRaw: new Set(),
+  filter: 'all', open: new Set(), showPassed: new Set(), showRaw: new Set(), showReason: new Set(), actSeen: null,
   approver: {}, qty: {}, busy: new Set(), actErr: {},
   seen: null, fresh: new Set(), lastErr: null, lastProveAt: 0,
 };
@@ -568,12 +568,76 @@ function checkLine(t, p) {
       <div class="text-[13px] italic ink2">${esc(t.text || '')}${nums ? ` <span class="sans not-italic text-[12px]">· ${esc(nums)}</span>` : ''}</div></div></div>`;
 }
 
+// ---------------------------------------------------- agent step trail --
+
+const shortPI = id => id ? 'pi_…' + String(id).slice(-4) : '';
+const shortKey = k => { k = String(k || ''); const m = /^([a-z]+_)/i.exec(k); return (m ? m[1] : '') + '…' + k.slice(-4); };
+const SOURCE_LABEL = { llm: 'Claude', fallback: 'structured fields', compromised: 'simulated compromised agent' };
+
+function checkCounts(p) {
+  const trace = p.trace || [];
+  const failed = trace.filter(t => t.fired && t.decision !== 'allow');
+  return { total: trace.length, failed, passed: trace.length - failed.length };
+}
+
+function stripeStatusText(p) {
+  if (p.status === 'escrow_captured') return `captured ${fmtGBP(p.captured_amount ?? p.amount)}`;
+  if (p.status === 'escrow_cancelled') return 'cancelled';
+  return p.stripe_status || (p.status === 'escrow_authorised' ? 'requires_capture' : 'sent');
+}
+
+function renderTrail(p) {
+  const inv = p.invoice || {}, pr = p.proposal || {};
+  const { total, failed, passed } = checkCounts(p);
+  const refused = isRefused(p);
+  const src = pr.source || 'llm';
+  const who = overrideBy(p);
+
+  const extra = [];
+  if (inv.api_key) extra.push(`key ${shortKey(inv.api_key)}`);
+  if (inv.nights != null || inv.city) extra.push([inv.nights != null ? `${inv.nights} night${inv.nights === 1 ? '' : 's'}` : '', inv.city || ''].filter(Boolean).join(' · '));
+  const s1 = `${esc(inv.invoice_id || pr.invoice_id || p.id)} · ${esc(relTime(p.created_at))}${extra.length ? `<br><span class="sans text-[11.5px]">${esc(extra.join(' · '))}</span>` : ''}`;
+
+  const srcHTML = src === 'compromised' ? `<span class="red font-semibold">${SOURCE_LABEL[src]}</span>` : esc(SOURCE_LABEL[src] || src);
+  const s2 = `<span class="sans text-[11.5px]">via ${srcHTML}</span><br>${esc(fmtGBP(pr.amount ?? p.amount))} to ${esc(vendorShort(p))}`;
+
+  const checksBad = refused || (!!who && failed.length > 0);
+  const s3 = checksBad ? `<span class="red">${passed} of ${total} passed</span>${failed[0] ? `<br><span class="sans text-[11.5px] red">✗ ${esc(failed[0].text || failed[0].rule_id)}</span>` : ''}` : `${passed} of ${total} passed`;
+
+  let s4, s4cls;
+  if (p.stripe_pi_id) {
+    const link = p.stripe_url ? ` <a class="quiet" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">↗</a>` : '';
+    s4 = `PaymentIntent <span class="sans text-[11.5px] whitespace-nowrap">${esc(shortPI(p.stripe_pi_id))}</span>${link}<br><span class="sans text-[11.5px]">${esc(stripeStatusText(p))}</span>`;
+    s4cls = 'ok';
+  } else {
+    s4 = '<span class="ink3">not sent — no money moved</span>';
+    s4cls = 'off';
+  }
+
+  const s5 = refused ? '<span class="red">Refused by policy</span>'
+    : who ? `<span class="green">Approved manually</span><br><span class="sans text-[11.5px]">by ${esc(who)}</span>` : '<span class="green">Accepted</span>';
+
+  const steps = [
+    ['ok', 'Invoice received', s1],
+    [src === 'compromised' ? 'bad' : 'ok', src === 'llm' ? 'Claude read it' : 'Agent read it', s2],
+    [checksBad ? 'bad' : 'ok', 'Policy checks', s3],
+    [s4cls, '<span class="stripe-mark">stripe</span>', s4],
+    [refused ? 'bad' : 'ok', 'Result', s5],
+  ];
+  const trail = `<div class="trail">${steps.map(([cls, lbl, det], i) =>
+    `<div class="st ${cls}"><span class="dot">${cls === 'bad' ? '✗' : cls === 'off' ? '–' : i + 1}</span><div class="lbl">${lbl}</div><div class="det">${det}</div></div>`).join('')}</div>`;
+
+  const r = pr.reasoning ? `<div data-act="toggle-reason" data-id="${esc(p.id)}" title="click to ${J.showReason.has(p.id) ? 'collapse' : 'expand'}"
+      class="reason mt-3 border-l-2 ${src === 'compromised' ? 'border-[#a3302a]' : 'border-[#c9c1ae]'} pl-3 ${J.showReason.has(p.id) ? '' : 'clip'}">“${esc(pr.reasoning)}”</div>` : '';
+  return `<div class="text-[12px] uppercase tracking-[0.15em] ink3 sans mb-2">What the agent did</div>${trail}${r}<div class="mb-4"></div>`;
+}
+
 function renderExpansion(p, prove) {
   const trace = p.trace || [];
   const failed = trace.filter(t => t.fired && t.decision !== 'allow').sort((a, b) => (SEV[b.decision] || 0) - (SEV[a.decision] || 0));
   const passed = trace.filter(t => !(t.fired && t.decision !== 'allow'));
 
-  let html = `<div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Policy checks · ${failed.length ? `${failed.length} of ${trace.length} failed` : `all ${trace.length} passed`}</div>
+  let html = renderTrail(p) + `<div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Policy checks · ${failed.length ? `${failed.length} of ${trace.length} failed` : `all ${trace.length} passed`}</div>
     <div class="mt-1 divide-y divide-[#e3ddcd] border-y hair">${failed.concat(passed).map(t => checkLine(t, p)).join('')}</div>`;
 
   html += `<div class="mt-4 border-t hair pt-3">`;
@@ -623,7 +687,7 @@ function rowHTML(p) {
 // Key that captures everything a row renders, so unchanged rows are left alone.
 function rowKey(p) {
   return JSON.stringify([p.status, p.approvals?.length, p.captured_amount, p.stripe_status, p.delivered_qty,
-    J.open.has(p.id), J.showPassed.has(p.id), J.showRaw.has(p.id), J.busy.has(p.id), J.fresh.has(p.id), J.actErr[p.id] || '',
+    J.open.has(p.id), J.showPassed.has(p.id), J.showReason.has(p.id), p.stripe_pi_id, p.proposal?.source, J.showRaw.has(p.id), J.busy.has(p.id), J.fresh.has(p.id), J.actErr[p.id] || '',
     J.open.has(p.id) ? (J.prove?.theorems || []).map(t => t.status).join() : '']);
 }
 
@@ -744,6 +808,58 @@ function renderSide() {
     </div>`;
 }
 
+// ------------------------------------------------------- agent activity --
+
+function activityLine(p) {
+  const pr = p.proposal || {};
+  const src = pr.source || 'llm';
+  const actor = src === 'compromised' ? '<span class="red font-semibold">Compromised agent</span>' : src === 'llm' ? 'Claude' : 'Agent';
+  const { total, failed, passed } = checkCounts(p);
+  const who = overrideBy(p);
+  let tail;
+  if (isRefused(p)) {
+    const f = failed.slice().sort((a, b) => (SEV[b.decision] || 0) - (SEV[a.decision] || 0))[0];
+    tail = `<span class="red">✗ refused: ${esc(f ? (f.text || f.rule_id) : 'policy')}</span>`;
+  } else {
+    tail = `${passed}/${total} checks passed`;
+    if (who) tail += ` · <span class="ink2">approved manually by ${esc(who)}</span>`;
+    if (p.stripe_pi_id) tail += ` · <span class="whitespace-nowrap"><span class="stripe-mark">stripe</span> <span class="sans text-[12px]">${esc(shortPI(p.stripe_pi_id))}</span> <span class="green">✓</span></span>`;
+  }
+  return `${actor} proposed <span class="font-semibold tnum">${esc(fmtGBP(pr.amount ?? p.amount))}</span> to ${esc(p.vendor_name || vendorShort(p))} · ${tail}`;
+}
+
+function renderActivity() {
+  const box = document.getElementById('activity');
+  if (!box) return;
+  const evs = J.payments.slice().sort((a, b) => createdMs(b) - createdMs(a) || String(b.id).localeCompare(String(a.id))).slice(0, 8);
+  if (!box.dataset.ready) {
+    box.innerHTML = `<div class="mb-2 flex items-baseline justify-between"><h2 class="text-[18px] font-semibold">Agent activity</h2>
+      <span class="sans text-[11px] ink3 flex items-center gap-1.5"><span class="pulse"></span>live</span></div>
+      <div id="act-list" class="border-y hair"></div>`;
+    box.dataset.ready = '1';
+  }
+  const list = document.getElementById('act-list');
+  if (!evs.length) { list.innerHTML = '<div class="act-line italic ink3">Waiting for invoices…</div>'; return; }
+  const first = J.actSeen === null;
+  if (first) J.actSeen = new Set();
+  const existing = new Map([...list.querySelectorAll('[data-ev]')].map(el => [el.dataset.ev, el]));
+  const nodes = evs.map(p => {
+    const html = `<span class="ink3 sans text-[11px] tnum mr-1.5" data-ago="${esc(p.created_at)}">${esc(relTime(p.created_at))}</span>${activityLine(p)}`;
+    let el = existing.get(p.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.dataset.ev = p.id;
+      el.className = 'act-line';
+      if (!first && !J.actSeen.has(p.id)) { el.classList.add('act-new'); setTimeout(() => el.classList.remove('act-new'), 2700); }
+    }
+    if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+    J.actSeen.add(p.id);
+    return el;
+  });
+  const cur = [...list.children];
+  if (cur.length !== nodes.length || nodes.some((n, i) => cur[i] !== n)) list.replaceChildren(...nodes);
+}
+
 function renderMasthead() {
   renderProvenHeader('payments');
 }
@@ -773,7 +889,7 @@ async function journalRefresh() {
   }
   document.getElementById('conn').innerHTML = J.lastErr
     ? `<div class="mt-3 border border-[#a3302a]/40 bg-[#a3302a]/[0.05] px-3 py-1.5 text-[13px] red">Cannot reach the server (${esc(J.lastErr)}). Retrying…</div>` : '';
-  renderMasthead(); renderFilters(); renderLedger(); renderSide();
+  renderMasthead(); renderFilters(); renderLedger(); renderActivity(); renderSide();
 }
 
 async function journalAction(act, id) {
@@ -821,6 +937,7 @@ function initJournal() {
     if (a) {
       const id = a.dataset.id;
       if (a.dataset.act === 'toggle-passed') { J.showPassed.has(id) ? J.showPassed.delete(id) : J.showPassed.add(id); renderLedger(true); }
+      else if (a.dataset.act === 'toggle-reason') { J.showReason.has(id) ? J.showReason.delete(id) : J.showReason.add(id); renderLedger(true); }
       else if (a.dataset.act === 'toggle-raw') { J.showRaw.add(id); renderLedger(true); }
       else journalAction(a.dataset.act, id);
       return;

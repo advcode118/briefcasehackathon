@@ -72,6 +72,8 @@ def fallback(payload: dict, error: str | None = None) -> dict:
         "vendor_id": payload.get("vendor_id"),
         "amount": _int(payload.get("amount")),
         "po_id": payload.get("po_id") or None,
+        "api_key": payload.get("api_key"),
+        "nights": payload.get("nights"),
         "reasoning": FALLBACK_REASONING,
         "source": "fallback",
     }
@@ -131,6 +133,8 @@ def propose(payload: dict) -> dict:
         "vendor_id": str(inp.get("vendor_id") or "") or base["vendor_id"],
         "amount": amount if amount is not None else base["amount"],
         "po_id": str(inp.get("po_id") or "") or base["po_id"],
+        "api_key": base["api_key"],
+        "nights": base["nights"],
         "reasoning": reasoning,
         "source": "llm",
     }

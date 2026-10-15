@@ -21,3 +21,27 @@ body { -webkit-font-smoothing: antialiased; background: #fdfcf8; color: #1a1a1a;
 .field { border: 1px solid #c9c1ae; background: #fff; padding: 2px 8px; font-size: 12px; }
 .badge { border: 1px solid #c9c1ae; padding: 0 6px; font-size: 11px; font-style: normal; }
 a.quiet { text-decoration: underline; text-decoration-color: #c9c1ae; text-underline-offset: 2px; }
+
+/* agent step trail (expansion) */
+.trail { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; }
+.trail .st { position: relative; padding: 0 8px 0 0; min-width: 0; }
+.trail .st .dot { position: relative; z-index: 1; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 999px;
+  font: 600 10px/1 Inter, system-ui, sans-serif; color: #fdfcf8; background: #1a1a1a; }
+.trail .st::before { content: ""; position: absolute; top: 8.5px; left: 18px; right: 0; height: 1.5px; background: #d6cfbd; }
+.trail .st:last-child::before { display: none; }
+.trail .st.ok .dot { background: #2f6f4f; } .trail .st.ok::before { background: #2f6f4f; opacity: .45; }
+.trail .st.bad .dot { background: #a3302a; } .trail .st.bad::before { background: #a3302a; opacity: .35; }
+.trail .st.off .dot { background: #c9c1ae; }
+.trail .lbl { margin-top: 5px; font: 600 11px/1.2 Inter, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+.trail .det { margin-top: 2px; font-size: 12.5px; line-height: 1.35; color: #4a4438; overflow-wrap: anywhere; }
+.reason { font-size: 13px; font-style: italic; color: #4a4438; cursor: pointer; }
+.reason.clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stripe-mark { font: 700 11px/1 Inter, system-ui, sans-serif; letter-spacing: -.02em; color: #635BFF; text-transform: none; font-size: 12.5px; }
+@media (max-width: 640px) { .trail { grid-template-columns: 1fr; row-gap: 8px; } .trail .st::before { display: none; } }
+/* agent activity log */
+.act-line { font-size: 13px; line-height: 1.4; padding: 5px 0; border-bottom: 1px solid #e3ddcd; }
+.act-line:last-child { border-bottom: 0; }
+.act-new { animation: actnew .6s ease-out, rownew 2.6s ease-out; }
+@keyframes actnew { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.pulse { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: #2f6f4f; animation: pl 1.6s ease-in-out infinite; }
+@keyframes pl { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }

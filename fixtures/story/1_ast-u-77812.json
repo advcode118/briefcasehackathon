@@ -1,0 +1,10 @@
+{
+  "invoice_id": "AST-U-77812",
+  "vendor_id": "aster",
+  "amount": 74200,
+  "currency": "gbp",
+  "po_id": "PO-105",
+  "api_key": "ak_7f3a_personal",
+  "body": "Usage alert — API key ak_7f3a_personal: 18,400 requests in the last 6 hours (gpt-class model, 41M tokens). Charge: £742.00 to the card on file.",
+  "day": 29
+}

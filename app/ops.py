@@ -89,6 +89,8 @@ class Txn:
     active: object = True     # executed (paid / escrow_authorised / escrow_captured)
     auto: object = False      # executed without a human
     pending: object = False   # held awaiting approval (always False in the prover)
+    key: object = None        # AI API key the usage was billed to (None = not an API usage bill)
+    nights: object = 0        # hotel nights on a travel claim (0 = not a hotel)
 
 
 @dataclass
@@ -100,6 +102,7 @@ class Ctx:
     po_vendor: dict = field(default_factory=dict)       # po -> vendor
     po_known: dict = field(default_factory=dict)        # po -> True
     vendor_is_agent: dict = field(default_factory=dict) # vendor -> bool
+    key_in_org: dict = field(default_factory=dict)      # API key -> True if registered to the firm's git org
     po_category: dict = field(default_factory=dict)     # po -> category (str concrete, index symbolic)
     category: dict = field(default_factory=dict)        # category name -> key used in po_category
     vendor_ids: list = field(default_factory=list)      # symbolic: index -> str id
@@ -115,6 +118,7 @@ class Ctx:
             po_known={po.id: True for po in seed.POS.values()},
             vendor_is_agent={v.id: v.is_agent for v in seed.VENDORS.values()},
             po_category={po.id: po.category for po in seed.POS.values()},
+            key_in_org={k: org == seed.GIT_ORG for k, org in seed.API_KEYS.items()},
             category={c: c for c in seed.CATEGORIES},
         )
 

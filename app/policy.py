@@ -34,7 +34,7 @@ _VERSIONS = [
      ["P4", "P5", "P6", "P7", "P8", "P9", "P10_naive", "P11", "P12"]),
     ("v4", "v4: P10 counts everything already paid against the PO (final)",
      ["P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11",
-      "AI1", "TR1", "TR2", "SW1", "SW2", "FD1", "FD2", "IN1", "IN2", "P12"]),
+      "AI0", "AI1", "TR1", "TR2", "TR3", "SW1", "SW2", "FD1", "FD2", "IN1", "IN2", "P12"]),
 ]
 
 POLICIES: dict[str, Policy] = {v: Policy(v, note, ids, _hash(ids)) for v, note, ids in _VERSIONS}

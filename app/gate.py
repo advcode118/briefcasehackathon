@@ -35,13 +35,15 @@ def history_from_payments(payments: list[dict]) -> list[Txn]:
         prop = pay.get("proposal") or {}
         hist.append(Txn(invoice=prop.get("invoice_id"), vendor=prop.get("vendor_id"),
                         amount=_amount(pay), po=_po(prop.get("po_id")), day=int(pay.get("day", 0)),
-                        active=active, auto=auto, pending=pending))
+                        active=active, auto=auto, pending=pending,
+                        key=prop.get("api_key"), nights=int(prop.get("nights") or 0)))
     return hist
 
 
 def proposal_txn(proposal: dict, day: int) -> Txn:
     return Txn(invoice=proposal.get("invoice_id"), vendor=proposal.get("vendor_id"),
-               amount=int(proposal.get("amount") or 0), po=_po(proposal.get("po_id")), day=int(day))
+               amount=int(proposal.get("amount") or 0), po=_po(proposal.get("po_id")), day=int(day),
+               key=proposal.get("api_key"), nights=int(proposal.get("nights") or 0))
 
 
 def _join(ids: list[str]) -> str:

@@ -308,6 +308,38 @@ _CAT_RULES = [
     ("IN2", "Insurance", "Insurance over £20,000 in 30 days needs approval", "window", 20_000_00),
 ]
 
+def ai1_key_fires(p, hist, ctx, ops):
+    # Keys are never symbolic: the prover's slots carry no key, so this rule only
+    # ever adds blocks there, which can't break a guarantee.
+    if p.key is None:
+        return False
+    return ops.Not(ops.lookup(p.key, ctx.key_in_org, False))
+
+
+def ai1_key_explain(p, hist, ctx):
+    if p.key is None:
+        return {"detail": "not an API usage bill", "evidence": []}
+    org = seed.API_KEYS.get(p.key, "unknown")
+    ok = ctx.key_in_org.get(p.key, False)
+    return {"detail": (f"key {p.key} is registered to github.com/{org}" if ok else
+                       f"key {p.key} belongs to {'github.com/' + org if org != 'unknown' else 'no known account'}, "
+                       f"not github.com/{seed.GIT_ORG}"),
+            "evidence": [f"API key registry: {len(seed.API_KEYS)} keys, synced from github.com/{seed.GIT_ORG}"]}
+
+
+def tr3_hotel_fires(p, hist, ctx, ops):
+    return ops.And(p.nights > 0, p.amount > seed.HOTEL_NIGHTLY_CAP * p.nights)
+
+
+def tr3_hotel_explain(p, hist, ctx):
+    if not p.nights:
+        return {"detail": "not a hotel claim", "evidence": []}
+    per = p.amount // p.nights
+    return {"detail": f"{fmt_gbp(p.amount)} / {p.nights} nights = {fmt_gbp(per)} per night "
+                      f"{_cmp(per, seed.HOTEL_NIGHTLY_CAP)} {fmt_gbp(seed.HOTEL_NIGHTLY_CAP)}",
+            "evidence": [f"cap: {fmt_gbp(seed.HOTEL_NIGHTLY_CAP)} per night"]}
+
+
 # rule id -> category shown on the Policies page
 RULE_CATEGORY = {"P11": "AI spend"}
 
@@ -345,3 +377,9 @@ for _rid, _cat, _text, _kind, _amt in _CAT_RULES:
                        _f, _e)
     RULE_CATEGORY[_rid] = _cat
 CATEGORY_RULE_IDS = [r[0] for r in _CAT_RULES]
+
+RULES["AI0"] = Rule("AI0", f"AI API usage must be billed to a key registered to our GitHub org ({seed.GIT_ORG})", "block",
+                    "p.key ≠ none ∧ p.key ∉ keys(github.com/" + seed.GIT_ORG + ")", ai1_key_fires, ai1_key_explain)
+RULES["TR3"] = Rule("TR3", f"Hotels must cost no more than {fmt_gbp(seed.HOTEL_NIGHTLY_CAP)} per night", "hold",
+                    "p.nights > 0 ∧ p.amount > £400 × p.nights", tr3_hotel_fires, tr3_hotel_explain)
+RULE_CATEGORY.update({"AI0": "AI spend", "TR3": "Travel"})
