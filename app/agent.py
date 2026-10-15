@@ -12,6 +12,8 @@ from . import seed
 SYSTEM_PROMPT = (
     "You are the accounts-payable agent for Acme Ltd. Read the incoming invoice and the "
     "open purchase orders, then propose one payment by calling propose_payment. "
+    "Propose exactly the amount the invoice asks for, and the purchase order the invoice "
+    "references (null if it references none); don't adjust either yourself. "
     "Briefly explain your reasoning."
 )
 
@@ -119,11 +121,16 @@ def propose(payload: dict) -> dict:
         return fallback(payload, f"{type(e).__name__}: {e}"[:300])
     base = fallback(payload)
     amount = _int(inp.get("amount_pence"))
+    reasoning = str(inp.get("reasoning") or "").strip() or "(no reasoning given)"
+    if amount is not None and amount <= 0 and base["amount"]:
+        # A £0 proposal is a no-op; propose the invoiced amount and let the gate decide.
+        reasoning += f" [Agent proposed £0; the invoiced amount {base['amount']}p is used instead.]"
+        amount = base["amount"]
     return {
         "invoice_id": str(inp.get("invoice_id") or "") or base["invoice_id"],
         "vendor_id": str(inp.get("vendor_id") or "") or base["vendor_id"],
         "amount": amount if amount is not None else base["amount"],
         "po_id": str(inp.get("po_id") or "") or base["po_id"],
-        "reasoning": str(inp.get("reasoning") or "").strip() or "(no reasoning given)",
+        "reasoning": reasoning,
         "source": "llm",
     }

@@ -1,0 +1,23 @@
+/* Proven — Journal look (cream paper, Source Serif 4, rules, figure captions). */
+body { -webkit-font-smoothing: antialiased; background: #fdfcf8; color: #1a1a1a; margin: 0; }
+.serif { font-family: "Source Serif 4", Georgia, serif; }
+.sans { font-family: Inter, system-ui, sans-serif; font-feature-settings: "tnum"; }
+.tnum { font-variant-numeric: tabular-nums; }
+.ink2 { color: #4a4438; } .ink3 { color: #8b8373; }
+.red { color: #a3302a; } .green { color: #2f6f4f; } .amber { color: #9a6f1f; } .blue { color: #3c5a8a; }
+.rule-top { border-top: 1.5px solid #1a1a1a; } .rule-bot { border-bottom: 1.5px solid #1a1a1a; }
+.hair { border-color: #e3ddcd; }
+.row-btn { cursor: pointer; }
+.row-btn:hover { background: rgba(26, 26, 26, .025); }
+.chev { display: inline-block; transition: transform .15s; }
+.chev.open { transform: rotate(90deg); }
+.fade-in { animation: fi .25s ease-out; }
+@keyframes fi { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; } }
+.row-new { animation: rownew 2.6s ease-out; }
+@keyframes rownew { 0% { background: rgba(184, 134, 43, .22); } 100% { background: transparent; } }
+.btn-approve { background: #2f6f4f; color: #fff; padding: 2px 12px; font-size: 12px; font-weight: 600; }
+.btn-reject { border: 1px solid #1a1a1a; padding: 1px 12px; font-size: 12px; }
+.btn-approve:disabled, .btn-reject:disabled { opacity: .5; }
+.field { border: 1px solid #c9c1ae; background: #fff; padding: 2px 8px; font-size: 12px; }
+.badge { border: 1px solid #c9c1ae; padding: 0 6px; font-size: 11px; font-style: normal; }
+a.quiet { text-decoration: underline; text-decoration-color: #c9c1ae; text-underline-offset: 2px; }

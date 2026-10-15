@@ -381,8 +381,15 @@ def _lemmas(tid: str, sm: SlotModel) -> list:
     return out
 
 
+def _spread(sm: SlotModel, k: int) -> list:
+    """Search hint: exactly the first k slots are active, spread evenly over the window."""
+    k = min(k, sm.n)
+    out = [z3.Implies(t.active, t.day == i * DAYS // k) for i, t in enumerate(sm.slots[:k])]
+    return out + ([z3.Not(sm.slots[k].active)] if k < sm.n else [])
+
+
 def _attack_hints(tid: str, sm: SlotModel) -> list:
-    """Search hints for finding an attack faster: no human approvals, and (for T1/T2)
+    """Search hints for finding an attack faster: no human approvals, and (for T1)
     every payment at the £100 approval threshold. Restricting the search can only
     remove models, so a SAT answer is still a genuine attack on the full model; an
     UNSAT answer here proves nothing and falls through to the full search."""
@@ -406,17 +413,20 @@ def _prove_slot_theorem(tid: str, sm: SlotModel, timeout_ms: int) -> dict:
     neg = _negation(tid, sm)
     full = [neg] + _lemmas(tid, sm)
     hints = _attack_hints(tid, sm)
-    r = z3.unknown
-    if tid == "T1":  # the hinted search is fast both ways for T1, so try it first
-        r2, m2 = _solve(sm, [neg] + hints, min(HINT_MS, left()))
-        if r2 == z3.sat:
-            r, m = r2, m2
+    r, hinted = z3.unknown, False
+    if tid == "T1":  # the hinted searches are fast both ways for T1, so try them first
+        fewest = seed.AUTO_CAP // DAILY_CAP + 1          # payments of £100 needed to pass the cap
+        for extra in (hints + _spread(sm, fewest), hints):
+            r2, m2 = _solve(sm, [neg] + extra, min(HINT_MS, left()))
+            if r2 == z3.sat:
+                r, m, hinted = r2, m2, True
+                break
     if r == z3.unknown:
         r, m = _solve(sm, full, min(FIRST_MS, left()))
     if r == z3.unknown and hints and tid != "T1" and left() > 0:
         r2, m2 = _solve(sm, [neg] + hints, min(HINT_MS, left()))
         if r2 == z3.sat:
-            r, m = r2, m2
+            r, m, hinted = r2, m2, True
     if r == z3.unknown and left() > 1000:
         r, m = _solve(sm, full, left())
     res = {"id": tid, "statement": THEOREMS[tid]}
@@ -429,7 +439,7 @@ def _prove_slot_theorem(tid: str, sm: SlotModel, timeout_ms: int) -> dict:
         tries = [tidy]
         if tid != "T1":  # short attacks: prefer one with few payments
             tries = [tidy + [z3.Not(sm.slots[k].active)] for k in (2, 3, 4) if k < sm.n] + tries
-        for extra in tries:
+        for extra in ([] if hinted else tries):  # hinted attacks are already tidy
             r3, m3 = _solve(sm, [neg] + extra, CLEAN_MS)
             if r3 == z3.sat:
                 m = m3
@@ -645,7 +655,8 @@ def worst_case(sm: SlotModel, timeout_ms: int = OPT_TIMEOUT_MS) -> dict:
         out.update(upper_bound=ub, bound_by=by)
         hints = [z3.Implies(t.active, t.auto) for t in S]
         flat = [z3.Implies(t.active, t.amount == DAILY_CAP) for t in S]
-        for extra, share in ((hints + flat, 0.5), (hints, 1.0)):
+        spread = _spread(sm, -(-ub // DAILY_CAP)) if ub % DAILY_CAP == 0 else []
+        for extra, share in ((hints + flat + spread, 0.3), (hints + flat, 0.5), (hints, 1.0)):
             left = int(timeout_ms - (time.perf_counter() - t0) * 1000)
             r, m = _solve(sm, [total >= ub] + extra, max(int(left * share), 2000))
             if r == z3.sat:

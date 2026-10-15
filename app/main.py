@@ -110,12 +110,17 @@ class ProverRunner:
 runner = ProverRunner()
 
 
+# T8 compares the active policy with v4, so under v4 it is true by construction; leave it out.
+SHOWN_THEOREMS = ("T1", "T2", "T3", "T5", "T6", "T7")
+
+
 def _theorem_statements() -> dict:
     try:
         from . import prover
-        return dict(prover.THEOREMS)
+        stmts = dict(prover.THEOREMS)
     except Exception:  # noqa: BLE001
-        return FALLBACK_THEOREMS
+        stmts = FALLBACK_THEOREMS
+    return {k: v for k, v in stmts.items() if k in SHOWN_THEOREMS}
 
 
 def _policy_hash(version: str) -> str | None:

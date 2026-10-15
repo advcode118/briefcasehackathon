@@ -383,488 +383,504 @@ function hasInjection(text) {
   return INJECTION_RE.test(text);
 }
 
-const Dash = {
-  payments: [],
-  summary: null,
-  policy: null,
-  prove: {},            // version -> result
-  filter: 'all',
-  selected: null,
-  seen: null,           // Set of ids seen so far (null before first load)
-  newAt: {},            // id -> ms when first seen
-  lastFeedKey: '',
-  lastPanelKey: '',
-  busy: false,
-  error: null,
+
+// =============================================================== journal --
+// Live dashboard (index.html). Ledger on the left, stats on the right.
+// The expansion body is ONE function, renderExpansion(payment, proveResult),
+// so its style can be swapped without touching the rest.
+
+const J = {
+  payments: [], summary: null, policy: null, prove: null,
+  filter: 'all', open: new Set(), showPassed: new Set(), showRaw: new Set(),
+  approver: {}, qty: {}, busy: new Set(),
+  seen: null, fresh: new Set(), lastErr: null, lastProveAt: 0,
 };
 
-const FILTERS = [
-  { key: 'all', label: 'All', match: () => true },
-  { key: 'paid', label: 'Paid', match: p => p.status === 'paid' },
-  { key: 'escrow', label: 'Escrow', match: p => String(p.status).startsWith('escrow') },
-  { key: 'held', label: 'Held', match: p => p.status === 'held' },
-  { key: 'blocked', label: 'Blocked', match: p => p.status === 'blocked' },
-];
+// Category comes from the PO (app/seed.py).
+const PO_CATEGORY = { 'PO-1': 'Hosting', 'PO-2': 'Print', 'PO-3': 'Data labelling', 'PO-4': 'Print', 'PO-5': 'Supplies' };
+const THEOREM_PLAIN = {
+  T1: 'Unapproved spend can never exceed £5,000 in 30 days',
+  T2: 'No vendor can receive over £100 in a day without approval',
+  T3: 'An invoice can never be paid twice',
+  T5: 'Never pays more than what was delivered on a purchase order',
+  T6: 'Escrow never pays out more than was authorised',
+  T7: 'Valid invoices are paid automatically',
+};
+const RULE_SHORT = {
+  P4: 'Duplicate invoice', P5: 'Over the £500 single-payment limit', P6: 'Over £100 without approval',
+  P7: 'Over £100 to one vendor in a day', P8: 'Over the £5,000 30-day cap', P9: 'No matching purchase order',
+  P10: 'More than was delivered', P10_naive: 'More than was delivered',
+};
+const JC = { paid: '#2f6f4f', held: '#b8862b', blocked: '#a3302a', rejected: '#8b8373', track: '#ece8dc' };
 
-async function dashRefresh() {
-  if (Dash.busy) return;
-  Dash.busy = true;
+const PAID_SET = new Set(['paid', 'escrow_authorised', 'escrow_captured']);
+const REVIEW_SET = new Set(['held', 'blocked', 'rejected']);
+
+function jVisible() {
+  return J.payments.filter(p => J.filter === 'all' || (J.filter === 'paid' ? PAID_SET.has(p.status) : REVIEW_SET.has(p.status)));
+}
+
+function vendorShort(p) {
+  return String(p.vendor_name || p.invoice?.vendor_id || '?').replace(/\s*\(.*\)\s*$/, '');
+}
+
+function relTime(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  return Math.round(s / 86400) + ' d ago';
+}
+
+// One line from the invoice body: first meaningful line, minus boilerplate.
+function describe(p) {
+  const body = String(p.invoice?.body || '');
+  const lines = body.split(/\n+/).map(s => s.trim()).filter(Boolean)
+    .filter(s => !/^(invoice|from|to|date|po|purchase order|amount|total|due)\b[^a-z]*[:#]/i.test(s));
+  let s = lines.find(l => l.length > 12) || lines[0] || '';
+  s = s.replace(/\s+/g, ' ');
+  if (s.length > 90) s = s.slice(0, 88) + '…';
+  const inv = p.invoice?.invoice_id || '';
+  return s ? `${inv} · ${s}` : inv;
+}
+
+// ------------------------------------------------ plain-English reasons --
+// Driven by the real trace entries (rule_id, detail) from app/rules.py.
+const MONEY = '£[\\d,]+(?:\\.\\d\\d)?';
+
+function traceTotal(t) {
+  const m = new RegExp(`= (${MONEY}) [>≤] (${MONEY})`).exec(t.detail || '');
+  return m ? { total: m[1], limit: m[2] } : null;
+}
+
+function plainReason(t, p) {
+  const d = t.detail || '';
+  const amt = fmtGBP(p.proposal?.amount ?? p.amount);
+  const vendor = vendorShort(p);
+  switch (t.rule_id) {
+    case 'P4': return 'Invoice ' + d.replace(/^\S+\s+/, (p.invoice?.invoice_id || '') + ' ') + '.';
+    case 'P5': return `${amt} is over the £500 single-payment limit.`;
+    case 'P6': return `${amt} is over the £100 limit for payments without approval.`;
+    case 'P7': { const x = traceTotal(t); return x ? `${vendor} would receive ${x.total} today — over the ${x.limit} daily limit without approval.` : d; }
+    case 'P8': { const x = traceTotal(t); return x ? `Unapproved spend would reach ${x.total} in 30 days — over the ${x.limit} cap.` : d; }
+    case 'P9': {
+      if (/no purchase order/.test(d)) return 'No purchase order for this payment.';
+      return d.charAt(0).toUpperCase() + d.slice(1) + '.';
+    }
+    case 'P10': {
+      const m = new RegExp(`against (\\S+) (${MONEY}) \\+ (${MONEY}) = (${MONEY}) > (${MONEY}) \\(received (\\d+) × (${MONEY})\\)`).exec(d);
+      if (!m) return d;
+      const [, po, before, , total, limit, recv] = m;
+      return before === '£0'
+        ? `Only ${recv} received on ${po}: ${limit} is payable, ${total} was invoiced.`
+        : `${po} would reach ${total} paid, but only ${limit} was delivered (${recv} received).`;
+    }
+    case 'P10_naive': {
+      const m = new RegExp(`(${MONEY}) > (${MONEY}) \\(received (\\d+)`).exec(d);
+      return m ? `${m[1]} is more than the ${m[2]} delivered (${m[3]} received).` : d;
+    }
+    case 'P11': return `${vendor} is an AI agent, so payments over £50 go through escrow.`;
+    default: return (t.text ? t.text + ': ' : '') + d;
+  }
+}
+
+const SEV = { allow: 0, escrow: 1, hold: 2, block: 3 };
+function firedChecks(p) {
+  return (p.trace || []).filter(t => t.fired && t.decision !== 'allow')
+    .sort((a, b) => (SEV[b.decision] || 0) - (SEV[a.decision] || 0));
+}
+
+// "bob requested this purchase order, so bob cannot approve it."
+function approvalSentence(a) {
+  const m = /^P12: (\S+) requested ([^\s,]+)/.exec(a.reason || '');
+  if (m) return `${m[1]} requested this purchase order (${m[2]}), so ${m[1]} cannot approve it.`;
+  return `${a.approver} could not approve: ${a.reason || 'refused'}.`;
+}
+
+function escrowNote(p) {
+  if (p.status === 'escrow_authorised') return 'held in escrow';
+  if (p.status === 'escrow_captured') {
+    const cap = p.captured_amount ?? p.amount;
+    const rel = (p.amount || 0) - cap;
+    return `${fmtGBP(cap)} captured on delivery of ${p.delivered_qty ?? '?'}/${p.ordered_qty ?? '?'}` + (rel > 0 ? `, ${fmtGBP(rel)} released` : '');
+  }
+  if (p.status === 'escrow_cancelled') return `escrow cancelled — nothing delivered, ${fmtGBP(p.amount)} released`;
+  return '';
+}
+
+function okApprover(p) {
+  const a = (p.approvals || []).filter(x => x.ok).slice(-1)[0];
+  return a ? a.approver : null;
+}
+
+function oneLiner(p) {
+  if (p.status.startsWith('escrow')) return `<span class="italic ink2">${esc(escrowNote(p))}</span>`;
+  if (p.status === 'paid') {
+    const who = okApprover(p);
+    return who ? `<span class="italic ink3">approved by ${esc(who)}</span>` : '';
+  }
+  if (p.status === 'rejected') {
+    const who = okApprover(p) || (p.approvals || []).slice(-1)[0]?.approver;
+    return `<span class="italic ink3">rejected${who ? ' by ' + esc(who) : ''}</span>`;
+  }
+  const f = firedChecks(p)[0];
+  if (!f) return '';
+  return `<span class="${p.status === 'blocked' ? 'red' : 'amber'}">${esc(plainReason(f, p))}</span>`;
+}
+
+function statusWord(p) {
+  return {
+    paid: '<span class="green">paid</span>', escrow_authorised: '<span class="green">paid · escrow</span>',
+    escrow_captured: '<span class="green">paid · escrow</span>', escrow_cancelled: '<span class="ink3">escrow cancelled</span>',
+    held: '<span class="amber">awaiting approval</span>', blocked: '<span class="red">refused by policy</span>',
+    rejected: '<span class="ink3">rejected</span>',
+  }[p.status] || esc(p.status);
+}
+
+// ---------------------------------------------------- expansion (style) --
+// Checklist style. Swap this one function to change the expansion style.
+
+function checkLine(t, p) {
+  const tot = traceTotal(t);
+  const amt = fmtGBP(p.proposal?.amount ?? p.amount);
+  const vendor = vendorShort(p);
+  const d = t.detail || '';
+  let label, nums = '';
+  switch (t.rule_id) {
+    case 'P4': label = 'Invoice not already paid'; nums = t.fired ? d : ''; break;
+    case 'P5': label = 'Single-payment limit'; nums = `${amt} of £500`; break;
+    case 'P6': label = 'Payments without approval'; nums = `${amt} of £100`; break;
+    case 'P7': label = `Daily limit for ${vendor}`; nums = tot ? `${tot.total} of ${tot.limit}` : ''; break;
+    case 'P8': label = '30-day unapproved spend'; nums = tot ? `${tot.total} of ${tot.limit}` : ''; break;
+    case 'P9': label = 'Purchase order matches vendor'; nums = d; break;
+    case 'P10': case 'P10_naive': {
+      const m = new RegExp(`(?:= |alone: )(${MONEY}) [>≤] (${MONEY})`).exec(d);
+      label = `Within what was delivered${p.invoice?.po_id ? ' on ' + p.invoice.po_id : ''}`;
+      nums = m ? `${m[1]} of ${m[2]}` : d; break;
+    }
+    case 'P11': label = 'AI-agent vendors over £50 use escrow'; nums = t.fired ? `${amt}` : d; break;
+    case 'P12': label = 'Requester cannot approve their own order'; nums = 'checked at approval'; break;
+    default: label = t.text || t.rule_id; nums = d;
+  }
+  const verdict = !t.fired ? 'passed' : { block: 'refused', hold: 'needs approval', escrow: 'paid via escrow' }[t.decision] || 'failed';
+  const col = !t.fired ? 'green' : t.decision === 'block' ? 'red' : t.decision === 'escrow' ? 'blue' : 'amber';
+  const tint = !t.fired ? '' : t.decision === 'block' ? 'bg-[#a3302a]/[0.06]' : t.decision === 'escrow' ? 'bg-[#2f5f8f]/[0.06]' : 'bg-[#b8862b]/[0.08]';
+  return `<div class="grid grid-cols-[18px_1fr_auto] items-baseline gap-x-2 px-2 py-1.5 ${tint}">
+    <span class="${col} text-center text-[15px]">${t.fired ? (t.decision === 'escrow' ? '◐' : '✗') : '✓'}</span>
+    <div><div class="text-[15px] ${t.fired ? 'font-semibold' : ''}">${esc(label)}</div>
+      <div class="text-[13px] italic ink2">${esc(t.text || '')}${nums ? ` <span class="sans not-italic text-[12px]">· ${esc(nums)}</span>` : ''}</div></div>
+    <span class="sans text-[11px] font-semibold uppercase tracking-wider ${col}">${verdict}</span></div>`;
+}
+
+function renderExpansion(p, prove) {
+  const trace = p.trace || [];
+  const failed = trace.filter(t => t.fired && t.decision !== 'allow').sort((a, b) => (SEV[b.decision] || 0) - (SEV[a.decision] || 0));
+  const passed = trace.filter(t => !(t.fired && t.decision !== 'allow'));
+
+  let html = `<div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Policy checks · ${failed.length ? `${failed.length} of ${trace.length} failed` : `all ${trace.length} passed`}</div>
+    <div class="mt-1 divide-y divide-[#e3ddcd] border-y hair">${failed.concat(passed).map(t => checkLine(t, p)).join('')}</div>`;
+
+  // status + actions
+  const refusals = (p.approvals || []).filter(a => !a.ok)
+    .map(a => `<div class="text-[14px] red">✗ ${esc(approvalSentence(a))}</div>`).join('');
+  html += `<div class="mt-4 border-t hair pt-3">`;
+  if (p.status === 'held') {
+    const sel = J.approver[p.id] || 'alice';
+    const busy = J.busy.has(p.id) ? 'disabled' : '';
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="amber">awaiting approval.</span> <span class="ink2">A human may approve or reject this payment.</span></div>
+      ${refusals ? `<div class="mt-1">${refusals}</div>` : ''}
+      <div class="sans mt-2 flex items-center gap-2">
+        <select data-approver="${esc(p.id)}" class="field">
+          <option value="alice" ${sel === 'alice' ? 'selected' : ''}>alice (CFO)</option>
+          <option value="bob" ${sel === 'bob' ? 'selected' : ''}>bob (Ops)</option></select>
+        <button data-act="approve" data-id="${esc(p.id)}" class="btn-approve" ${busy}>Approve</button>
+        <button data-act="reject" data-id="${esc(p.id)}" class="btn-reject" ${busy}>Reject</button></div>`;
+  } else if (p.status === 'blocked') {
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="red">refused by policy — cannot be approved.</span> <span class="ink2">No human can override a block; the vendor must send a corrected invoice.</span></div>`;
+  } else if (p.status === 'escrow_authorised') {
+    const q = J.qty[p.id] ?? (p.ordered_qty ?? '');
+    const busy = J.busy.has(p.id) ? 'disabled' : '';
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">held in escrow.</span> <span class="ink2">Funds are authorised; they are captured in proportion to what is delivered.</span></div>
+      <div class="sans mt-2 flex items-center gap-2 text-[12px]">
+        <span class="ink2">Delivered</span>
+        <input data-qty="${esc(p.id)}" type="number" min="0" ${p.ordered_qty ? `max="${p.ordered_qty}"` : ''} value="${esc(q)}" class="field w-20" />
+        <span class="ink2">of ${esc(p.ordered_qty ?? '?')}</span>
+        <button data-act="deliver" data-id="${esc(p.id)}" class="btn-approve" ${busy}>Record delivery</button></div>`;
+  } else if (p.status === 'rejected') {
+    html += `<div><span class="font-semibold italic">Status:</span> rejected${okApprover(p) ? ' by ' + esc(okApprover(p)) : ''}. No money moved.</div>${refusals ? `<div class="mt-1">${refusals}</div>` : ''}`;
+  } else if (p.status.startsWith('escrow')) {
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">${esc(escrowNote(p))}.</span></div>`;
+  } else {
+    const who = okApprover(p);
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">paid</span>${who ? ` after approval by ${esc(who)}` : ' automatically: every check passed'}.${p.stripe_url ? ` <a class="quiet sans text-[12px]" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">view in Stripe ↗</a>` : ''}</div>${refusals ? `<div class="mt-1">${refusals}</div>` : ''}`;
+  }
+  html += `</div>`;
+
+  return html;
+}
+
+// -------------------------------------------------------------- ledger --
+
+function renderFilters() {
+  const n = {
+    all: J.payments.length,
+    paid: J.payments.filter(p => PAID_SET.has(p.status)).length,
+    review: J.payments.filter(p => REVIEW_SET.has(p.status)).length,
+  };
+  document.getElementById('filters').innerHTML = `<div class="sans flex border border-[#1a1a1a] text-[12px]">${[['all', 'All'], ['paid', 'Paid'], ['review', 'Needs review']].map(([k, l]) =>
+    `<button data-filter="${k}" class="px-2.5 py-0.5 ${J.filter === k ? 'bg-[#1a1a1a] text-[#fdfcf8]' : ''}">${l} <span class="opacity-60">${n[k]}</span></button>`).join('')}</div>`;
+}
+
+function rowHTML(p) {
+  const open = J.open.has(p.id);
+  return `<div data-row="${esc(p.id)}" class="border-b hair last:border-b-0 ${J.fresh.has(p.id) ? 'row-new' : ''}">
+    <div data-toggle="${esc(p.id)}" class="row-btn grid grid-cols-[18px_36px_1fr_auto] items-start gap-3 px-1 py-3">
+      <span class="sans chev ${open ? 'open' : ''} pt-1 text-[14px] ink3">▸</span>
+      <span class="grid h-8 w-8 place-items-center rounded-full bg-[#ece8dc] text-[14px] font-semibold">${esc(vendorShort(p)[0] || '?')}</span>
+      <div class="min-w-0"><div class="text-[15px] font-semibold">${esc(vendorShort(p))}</div>
+        <div class="truncate text-[14px] italic ink2">${esc(describe(p))}</div>
+        <div class="mt-0.5 text-[14px]">${oneLiner(p)}</div></div>
+      <div class="text-right"><div class="text-[17px] font-semibold tnum">${esc(fmtGBP(p.amount))}</div>
+        <div class="text-[13px] italic">${statusWord(p)}</div><div class="text-[12px] italic ink3" data-ago="${esc(p.created_at)}">${esc(relTime(p.created_at))}</div></div>
+    </div>
+    ${open ? `<div data-exp="${esc(p.id)}" class="fade-in mx-2 mb-5 mt-1 bg-white/60 px-5 py-4 ring-1 ring-[#e3ddcd]">${renderExpansion(p, J.prove)}</div>` : ''}
+  </div>`;
+}
+
+// Key that captures everything a row renders, so unchanged rows are left alone.
+function rowKey(p) {
+  return JSON.stringify([p.status, p.approvals?.length, p.captured_amount, p.stripe_status, p.delivered_qty,
+    J.open.has(p.id), J.showPassed.has(p.id), J.showRaw.has(p.id), J.busy.has(p.id), J.fresh.has(p.id),
+    J.open.has(p.id) ? (J.prove?.theorems || []).map(t => t.status).join() : '']);
+}
+
+function renderLedger(force) {
+  const box = document.getElementById('ledger');
+  const rows = jVisible();
+  if (!rows.length) {
+    box.innerHTML = `<div class="py-10 text-center italic ink3">${J.payments.length ? 'Nothing in this view.' : 'No payments yet. Send an invoice to /webhook/invoice.'}</div>`;
+    return;
+  }
+  // Rebuild only rows whose content changed; keep focused inputs intact.
+  const existing = new Map([...box.querySelectorAll(':scope > [data-row]')].map(el => [el.dataset.row, el]));
+  if (existing.size === 0) box.innerHTML = '';
+  const frag = [];
+  for (const p of rows) {
+    const key = rowKey(p);
+    let el = existing.get(p.id);
+    if (!el || el.dataset.key !== key || force) {
+      const active = document.activeElement;
+      if (el && active && el.contains(active) && !force) { frag.push(el); continue; } // user is typing here
+      const tmp = document.createElement('div');
+      tmp.innerHTML = rowHTML(p);
+      const nu = tmp.firstElementChild;
+      nu.dataset.key = key;
+      el = nu;
+    }
+    frag.push(el);
+  }
+  box.replaceChildren(...frag);
+  box.querySelectorAll('[data-ago]').forEach(e => { e.textContent = relTime(e.dataset.ago); });
+}
+
+// ------------------------------------------------------------ side column --
+
+function sideStats() {
+  const c = { paid: 0, held: 0, blocked: 0, rejected: 0 };
+  for (const p of J.payments) {
+    if (PAID_SET.has(p.status)) c.paid++;
+    else if (p.status in c) c[p.status]++;
+  }
+  return c;
+}
+
+function donutSVG(c, n, size = 150, sw = 20) {
+  const r = (size - sw) / 2, C = 2 * Math.PI * r; let off = 0;
+  const segs = n ? ['paid', 'held', 'blocked', 'rejected'].filter(k => c[k]).map(k => {
+    const len = c[k] / n * C;
+    const s = `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${JC[k]}" stroke-width="${sw}" stroke-dasharray="${Math.max(len - 2, 1)} ${C - len + 2}" stroke-dashoffset="${-off}"/>`;
+    off += len; return s;
+  }).join('') : '';
+  return `<svg width="${size}" height="${size}" class="shrink-0"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${JC.track}" stroke-width="${sw}"/>
+    <g transform="rotate(-90 ${size / 2} ${size / 2})">${segs}</g>
+    <text x="50%" y="48%" text-anchor="middle" class="serif" font-size="28" font-weight="600" fill="#1a1a1a">${n}</text>
+    <text x="50%" y="63%" text-anchor="middle" class="serif" font-size="12" font-style="italic" fill="#6b6457">payments</text></svg>`;
+}
+
+function effectivePaid(p) {
+  if (p.status === 'escrow_captured') return p.captured_amount ?? 0;
+  if (PAID_SET.has(p.status)) return p.amount || 0;
+  return 0;
+}
+
+function renderSide() {
+  const s = J.summary || {};
+  const c = sideStats();
+  const n = J.payments.length;
+  const totalPaid = s.total_paid ?? J.payments.reduce((a, p) => a + effectivePaid(p), 0);
+  const cap = s.auto_cap ?? 500000, spent = s.auto_spend_window ?? 0;
+  const pct = cap ? Math.min(100, spent / cap * 100) : 0;
+  const legend = [['paid', 'Paid'], ['held', 'Awaiting approval'], ['blocked', 'Refused by policy'], ['rejected', 'Rejected']]
+    .map(([k, l]) => `<div class="flex items-center gap-2"><span class="h-2.5 w-2.5" style="background:${JC[k]}"></span><span class="w-36">${l}</span><span class="tnum font-semibold">${c[k]}</span></div>`).join('');
+
+  // spending by category (paid, plus pending = awaiting approval)
+  const cats = {};
+  for (const p of J.payments) {
+    const cat = PO_CATEGORY[p.invoice?.po_id] || 'No purchase order';
+    cats[cat] = cats[cat] || { paid: 0, pending: 0 };
+    cats[cat].paid += effectivePaid(p);
+    if (p.status === 'held') cats[cat].pending += p.amount || 0;
+  }
+  const catRows = Object.entries(cats).filter(([, v]) => v.paid || v.pending).sort((a, b) => (b[1].paid + b[1].pending) - (a[1].paid + a[1].pending));
+  const maxCat = Math.max(1, ...catRows.map(([, v]) => v.paid + v.pending));
+  const spend = catRows.length ? catRows.map(([k, v]) => `<div class="py-1.5">
+      <div class="flex items-baseline justify-between text-[14px]"><span>${esc(k)}</span>
+        <span class="sans text-[13px] tnum">${esc(fmtGBP(v.paid))}${v.pending ? ` <span class="ink3 text-[11px]">+${esc(fmtGBP(v.pending))} pending</span>` : ''}</span></div>
+      <div class="mt-1 h-1 bg-[#ece8dc]"><div class="flex h-full"><div style="width:${v.paid / maxCat * 100}%;background:${JC.paid}"></div><div style="width:${v.pending / maxCat * 100}%;background:${JC.held};opacity:.45"></div></div></div>
+    </div>`).join('') : '<div class="py-2 italic ink3 text-[14px]">Nothing yet.</div>';
+
+  // block reasons (plain English), from fired trace entries of stopped payments
+  const reasons = { block: {}, hold: {} };
+  for (const p of J.payments) {
+    if (!REVIEW_SET.has(p.status) && p.decision !== 'hold' && p.decision !== 'block') continue;
+    for (const t of p.trace || []) {
+      if (!t.fired || !(t.decision in reasons)) continue;
+      const l = RULE_SHORT[t.rule_id] || t.text || t.rule_id;
+      reasons[t.decision][l] = (reasons[t.decision][l] || 0) + 1;
+    }
+  }
+  const rgrp = (title, obj, col) => {
+    const rows = Object.entries(obj).sort((a, b) => b[1] - a[1]);
+    if (!rows.length) return '';
+    return `<div class="mt-2 text-[13px] italic ink2">${title}</div>` + rows.map(([l, k]) =>
+      `<div class="flex items-center gap-2 border-b hair py-1.5 text-[14px] last:border-b-0"><span class="${col}">●</span><span class="flex-1">${esc(l)}</span><span class="sans tnum font-semibold">${k}</span></div>`).join('');
+  };
+  const reasonHTML = (rgrp('Refused by policy', reasons.block, 'red') + rgrp('Held for a human', reasons.hold, 'amber')) || '<div class="py-2 italic ink3 text-[14px]">Nothing stopped yet.</div>';
+
+  document.getElementById('side').innerHTML = `
+    <section>
+      <div class="mb-3 flex items-baseline justify-between"><h2 class="text-[21px] font-semibold"><span class="ink3 mr-2">2.</span>Stats · Last 30 days</h2>
+        <div class="sans flex border border-[#1a1a1a] text-[11px]" title="visual only"><button class="bg-[#1a1a1a] px-2.5 py-0.5 text-[#fdfcf8]">30d</button><button class="px-2.5 py-0.5">6m</button><button class="px-2.5 py-0.5">1y</button></div></div>
+      <div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Total paid</div>
+      <div class="text-[56px] font-semibold leading-none tnum">${esc(fmtGBP(totalPaid))}</div>
+      <div class="mt-4 flex items-center gap-6">${donutSVG(c, n)}<div class="space-y-1.5 text-[14px]">${legend}</div></div>
+      <div class="mt-2 text-[13px] ink2"><b>Fig. 1.</b> Outcomes by count (n = ${n}).</div>
+      <div class="mt-5"><div class="sans flex items-baseline justify-between text-[12px] ink2"><span>Unapproved spend vs cap (30 days)</span><span class="tnum">${esc(fmtGBP(spent))} / ${esc(fmtGBP(cap))}</span></div>
+        <div class="mt-1 h-1.5 bg-[#ece8dc]"><div class="h-full bg-[#2f6f4f]" style="width:${Math.max(pct, 0.8)}%"></div></div></div>
+    </section>
+    <div class="grid grid-cols-1 gap-8 sm:grid-cols-2">
+      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">3.</span>Spending breakdown</h2>${spend}
+        <div class="mt-1.5 text-[12px] ink2"><b>Fig. 2.</b> By purchase-order category; amber = awaiting approval.</div></section>
+      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">4.</span>Why payments stopped</h2>${reasonHTML}
+        <div class="mt-1.5 text-[12px] ink2">A payment can fail more than one check.</div></section>
+    </div>`;
+}
+
+function renderMasthead() {
+  const s = J.summary || {};
+  const stripe = s.stripe_mode === 'test' ? 'Stripe test mode' : s.stripe_mode === 'offline' ? 'Stripe offline' : 'Stripe …';
+  const agent = s.agent_mode === 'llm' ? 'agent: Claude' : s.agent_mode === 'fallback' ? 'agent: fallback (no LLM)' : 'agent …';
+  document.getElementById('masthead').innerHTML = `<div class="flex flex-wrap items-end justify-between gap-3">
+      <div><div class="text-[34px] font-semibold tracking-tight">Proven</div><div class="text-[14px] italic ink2">proven, not prompted</div></div>
+      <div class="flex flex-wrap items-center gap-2 text-[13px] italic ink2">
+        <span>Accounts payable, Acme Ltd${s.day != null ? ' · day ' + esc(s.day) : ''}</span>
+        <span class="badge sans ${s.stripe_mode === 'test' ? 'blue' : 'ink3'}">${esc(stripe)}</span>
+        <span class="badge sans ${s.agent_mode === 'llm' ? 'green' : 'amber'}">${esc(agent)}</span>
+        <a href="/settings" class="sans not-italic text-[12px] quiet">Settings →</a></div></div>
+    <div class="mt-4 border-t-2 border-[#1a1a1a]"></div><div class="mt-[2px] border-t border-[#1a1a1a]"></div>`;
+}
+
+// ------------------------------------------------------------- refresh --
+
+async function journalRefresh() {
   try {
-    const [payments, summary, policy] = await Promise.all([
-      api('GET', '/api/payments'),
-      api('GET', '/api/summary').catch(() => Dash.summary),
-      api('GET', '/api/policy').catch(() => Dash.policy),
-    ]);
-    Dash.payments = payments || [];
-    Dash.summary = summary;
-    Dash.policy = policy;
-    const versions = new Set();
-    if (policy) versions.add(policy.version);
-    const sel = Dash.selected && Dash.payments.find(p => p.id === Dash.selected);
-    if (sel && sel.policy_version) versions.add(sel.policy_version);
-    await Promise.all([...versions].map(v =>
-      api('GET', `/api/prove?version=${encodeURIComponent(v)}`).then(r => { Dash.prove[v] = r; }).catch(() => {})));
-    Dash.error = null;
-
-    // new-row tracking
-    const now = Date.now();
-    if (Dash.seen === null) {
-      Dash.seen = new Set(Dash.payments.map(p => p.id));
-    } else {
-      for (const p of Dash.payments) {
-        if (!Dash.seen.has(p.id)) { Dash.seen.add(p.id); Dash.newAt[p.id] = now; }
+    const [payments, summary] = await Promise.all([api('GET', '/api/payments'), api('GET', '/api/summary')]);
+    if (J.seen === null) J.seen = new Set(payments.map(p => p.id));
+    for (const p of payments) {
+      if (!J.seen.has(p.id)) {
+        J.seen.add(p.id); J.fresh.add(p.id);
+        setTimeout(() => { J.fresh.delete(p.id); }, 2700);
       }
     }
-    renderDash();
+    J.payments = payments; J.summary = summary; J.lastErr = null;
+    if (!J.prove || Date.now() - J.lastProveAt > 10000) {
+      J.lastProveAt = Date.now();
+      try {
+        J.policy = await api('GET', '/api/policy');
+        J.prove = await api('GET', '/api/prove?version=' + encodeURIComponent(J.policy.version || 'v4'));
+      } catch (_) { /* prove is optional */ }
+    }
   } catch (e) {
-    Dash.error = e.message || String(e);
-    renderConn();
-  } finally {
-    Dash.busy = false;
+    J.lastErr = e.message;
   }
+  document.getElementById('conn').innerHTML = J.lastErr
+    ? `<div class="mt-3 border border-[#a3302a]/40 bg-[#a3302a]/[0.05] px-3 py-1.5 text-[13px] red">Cannot reach the server (${esc(J.lastErr)}). Retrying…</div>` : '';
+  renderMasthead(); renderFilters(); renderLedger(); renderSide();
 }
 
-function renderConn() {
-  const el = document.getElementById('conn');
-  if (!el) return;
-  if (Dash.error) {
-    el.innerHTML = `<div class="mx-auto mt-4 max-w-[1400px] px-6"><div class="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-      <span class="h-2 w-2 animate-pulse rounded-full bg-amber-500"></span>Waiting for the API… <span class="font-mono text-xs text-amber-700/80">${esc(Dash.error)}</span></div></div>`;
-  } else el.innerHTML = '';
-}
-
-function renderDash() {
-  renderConn();
-  const activeProve = Dash.policy ? Dash.prove[Dash.policy.version] : null;
-  updateHeader({ policy: Dash.policy, prove: activeProve, summary: Dash.summary });
-  renderTiles(activeProve);
-  renderChips();
-  renderFeed();
-  renderPanel();
-}
-
-function renderTiles(prove) {
-  const s = Dash.summary || {};
-  const cap = s.auto_cap || 500000;
-  const used = s.auto_spend_window || 0;
-  const pct = Math.min(100, (used / cap) * 100);
-  const barColor = pct >= 100 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
-  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
-  const paidCount = Dash.payments.filter(p => p.status === 'paid' || p.status === 'escrow_captured').length;
-  set('tile-paid', `<div class="tile-label">Total paid</div>
-    <div class="tile-value">${fmtGBP(s.total_paid ?? 0)}</div>
-    <div class="tile-sub">${paidCount} payment${paidCount === 1 ? '' : 's'} settled${s.escrow ? ` · ${s.escrow} in escrow` : ''}</div>`);
-  set('tile-held', `<div class="tile-label">Held for approval</div>
-    <div class="tile-value ${s.held ? 'text-amber-600' : ''}">${s.held ?? 0}</div>
-    <div class="tile-sub">waiting for a human</div>`);
-  set('tile-blocked', `<div class="tile-label">Blocked</div>
-    <div class="tile-value ${s.blocked ? 'text-red-600' : ''}">${s.blocked ?? 0}</div>
-    <div class="tile-sub">stopped by the gate</div>`);
-  set('tile-meter', `<div class="flex items-baseline justify-between"><div class="tile-label">Unapproved spend · this 30-day window</div>
-      <div class="text-xs font-medium text-slate-400">${pct.toFixed(pct < 10 && pct > 0 ? 1 : 0)}%</div></div>
-    <div class="mt-1 flex items-baseline gap-2"><span class="tile-value">${fmtGBP(used)}</span><span class="text-sm font-medium text-slate-400">of ${fmtGBP(cap)} cap</span></div>
-    <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100"><div class="h-full rounded-full ${barColor} transition-all duration-700" style="width:${pct}%"></div></div>
-    <div class="tile-sub mt-2">Above the cap, P8 holds every payment for a human.</div>`);
-  set('tile-worst', worstCaseHTML(prove, cap));
-}
-
-function renderChips() {
-  const el = document.getElementById('chips');
-  if (!el) return;
-  el.innerHTML = FILTERS.map(f => {
-    const n = Dash.payments.filter(f.match).length;
-    const on = Dash.filter === f.key;
-    return `<button data-filter="${f.key}" class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition
-      ${on ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50'}">
-      ${f.label}<span class="${on ? 'text-slate-300' : 'text-slate-400'} tabular-nums">${n}</span></button>`;
-  }).join('');
-}
-
-function renderFeed() {
-  const tbody = document.getElementById('feed');
-  if (!tbody) return;
-  const f = FILTERS.find(x => x.key === Dash.filter) || FILTERS[0];
-  const rows = Dash.payments.filter(f.match);
-  const key = JSON.stringify([Dash.filter, Dash.selected, rows.map(p => [p.id, p.status, p.stripe_status, p.captured_amount])]);
-  if (key === Dash.lastFeedKey) return;
-  Dash.lastFeedKey = key;
-
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="px-6 py-16 text-center">
-      <div class="text-sm font-medium text-slate-500">${Dash.payments.length ? 'No payments match this filter.' : 'No payments yet.'}</div>
-      <div class="mt-1 text-xs text-slate-400">${Dash.payments.length ? '' : 'Invoices posted to <span class="font-mono">/webhook/invoice</span> appear here live.'}</div></td></tr>`;
-    return;
-  }
-  const now = Date.now();
-  tbody.innerHTML = rows.map(p => {
-    const inv = p.invoice?.invoice_id || p.proposal?.invoice_id || '—';
-    const isNew = Dash.newAt[p.id] && now - Dash.newAt[p.id] < 2600;
-    const delay = isNew ? `style="animation-delay:-${now - Dash.newAt[p.id]}ms"` : '';
-    const sel = Dash.selected === p.id;
-    const rules = (p.deciding_rules || []).map(r => ruleChip(r, p.decision)).join(' ');
-    const approvedNote = p.decision === 'hold' && isExecuted(p.status) ? '<div class="mt-0.5 text-[11px] text-slate-400">after approval</div>' : '';
-    const injected = hasInjection(p.invoice?.body);
-    const stripe = p.stripe_pi_id
-      ? (isOfflinePI(p.stripe_pi_id)
-          ? `<span class="font-mono text-[11px] text-slate-400">${esc(p.stripe_pi_id)}</span>`
-          : `<a href="${esc(p.stripe_url || `https://dashboard.stripe.com/test/payments/${p.stripe_pi_id}`)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"
-              class="inline-flex items-center gap-1 font-mono text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline">${esc(String(p.stripe_pi_id).slice(0, 14))}…<span aria-hidden="true">↗</span></a>`)
-      : p.stripe_error
-        ? `<span title="${esc(p.stripe_error)}" class="inline-flex items-center gap-1 rounded-md bg-red-50 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-inset ring-red-200">Stripe error</span>`
-        : '<span class="text-slate-300">—</span>';
-    return `<tr data-id="${esc(p.id)}" ${delay} class="feed-row cursor-pointer border-t border-slate-100 transition-colors ${sel ? 'bg-indigo-50/60' : 'hover:bg-slate-50'} ${isNew ? 'row-new' : ''}">
-      <td class="whitespace-nowrap py-3 pl-6 pr-3 text-xs text-slate-500"><div class="font-medium tabular-nums text-slate-700">${fmtTime(p.created_at)}</div><div class="text-[11px] text-slate-400">day ${esc(p.day)}</div></td>
-      <td class="whitespace-nowrap px-3 py-3"><div class="flex items-center gap-1.5 font-mono text-[13px] font-medium text-slate-900">${esc(inv)}${injected ? '<span title="Invoice text contains instructions to the agent" class="rounded bg-red-100 px-1 py-px font-sans text-[10px] font-bold uppercase tracking-wide text-red-700">injection</span>' : ''}</div></td>
-      <td class="px-3 py-3 text-sm text-slate-700"><div class="max-w-[220px] truncate">${esc(p.vendor_name || p.proposal?.vendor_id || '')}</div></td>
-      <td class="whitespace-nowrap px-3 py-3 text-right text-sm font-semibold tabular-nums text-slate-900">${fmtGBP(p.amount)}</td>
-      <td class="whitespace-nowrap px-3 py-3">${statusBadge(p.status)}${approvedNote}</td>
-      <td class="px-3 py-3"><div class="flex flex-wrap gap-1">${rules || '<span class="text-xs text-slate-400">all passed</span>'}</div></td>
-      <td class="whitespace-nowrap py-3 pl-3 pr-6">${stripe}</td>
-    </tr>`;
-  }).join('');
-}
-
-// ----- side panel
-
-function openPanel(id) {
-  Dash.selected = id;
-  Dash.lastPanelKey = '';
-  Dash.lastFeedKey = '';
-  const panel = document.getElementById('panel');
-  panel.classList.remove('translate-x-full', 'shadow-none');
-  panel.setAttribute('aria-hidden', 'false');
-  document.getElementById('panel-scroll').scrollTop = 0;
-  renderFeed();
-  renderPanel();
-  // make sure we have the prove result for this payment's version
-  const p = Dash.payments.find(x => x.id === id);
-  if (p && p.policy_version && !Dash.prove[p.policy_version]) {
-    api('GET', `/api/prove?version=${encodeURIComponent(p.policy_version)}`)
-      .then(r => { Dash.prove[p.policy_version] = r; Dash.lastPanelKey = ''; renderPanel(); }).catch(() => {});
-  }
-}
-
-function closePanel() {
-  Dash.selected = null;
-  Dash.lastFeedKey = '';
-  const panel = document.getElementById('panel');
-  panel.classList.add('translate-x-full', 'shadow-none');
-  panel.setAttribute('aria-hidden', 'true');
-  renderFeed();
-}
-
-function section(title, body, extra = '') {
-  return `<section class="border-t border-slate-100 px-6 py-5">
-    <div class="mb-3 flex items-center justify-between gap-2"><h3 class="text-[11px] font-bold uppercase tracking-wider text-slate-400">${title}</h3>${extra}</div>
-    ${body}</section>`;
-}
-
-function highlightInjection(text) {
-  INJECTION_RE.lastIndex = 0;
-  return esc(text).replace(INJECTION_RE, m => `<mark class="rounded bg-red-100 px-0.5 text-red-800">${m}</mark>`);
-}
-
-function renderPanel() {
-  const body = document.getElementById('panel-body');
-  if (!body || !Dash.selected) return;
-  const p = Dash.payments.find(x => x.id === Dash.selected);
-  if (!p) {
-    body.innerHTML = '<div class="p-6 text-sm text-slate-500">Payment not found.</div>';
-    return;
-  }
-  const prove = Dash.prove[p.policy_version] || null;
-  const key = JSON.stringify([p, prove && prove.theorems && prove.theorems.map(t => t.status), Dash.policy && Dash.policy.version, p8Active(Dash.policy)]);
-  if (key === Dash.lastPanelKey) return;
-  Dash.lastPanelKey = key;
-
-  // preserve UI state across re-render
-  const prevApprover = document.getElementById('approver')?.value;
-  const prevQty = document.getElementById('qty')?.value;
-  const rawOpen = document.getElementById('raw-invoice')?.open;
-
-  const st = STATUS[p.status] || {};
-  const tone = st.tone || 'slate';
-  const bannerCls = {
-    emerald: 'bg-emerald-50 ring-emerald-200', blue: 'bg-blue-50 ring-blue-200', amber: 'bg-amber-50 ring-amber-200',
-    red: 'bg-red-50 ring-red-200', slate: 'bg-slate-50 ring-slate-200',
-  }[tone];
-  const inv = p.invoice || {};
-  const prop = p.proposal || {};
-  const invId = inv.invoice_id || prop.invoice_id || p.id;
-
-  // 1. verdict
-  let html = `
-  <div class="px-6 pb-5 pt-5">
-    <div class="flex items-start justify-between gap-4">
-      <div>
-        <div class="flex items-center gap-2 font-mono text-sm font-semibold text-slate-900">${esc(invId)}
-          <span class="font-sans text-xs font-normal text-slate-400">${esc(p.id)} · day ${esc(p.day)} · ${fmtTime(p.created_at)}</span></div>
-        <div class="mt-0.5 text-sm text-slate-600">${esc(p.vendor_name || prop.vendor_id || '')}</div>
-      </div>
-      <div class="text-right">
-        <div class="text-2xl font-semibold tracking-tight tabular-nums text-slate-900">${fmtGBP(p.amount)}</div>
-        <div class="mt-1">${statusBadge(p.status, 'lg')}</div>
-      </div>
-    </div>
-    <div class="mt-4 rounded-xl p-4 ring-1 ring-inset ${bannerCls}">
-      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500">Verdict</div>
-      <p class="mt-1 text-[15px] font-medium leading-snug text-slate-900">${esc(p.verdict || '')}</p>
-      ${p.decision === 'hold' && isExecuted(p.status) ? '<p class="mt-1.5 text-xs text-slate-500">Approved by a human, then executed.</p>' : ''}
-    </div>
-  </div>`;
-
-  // actions (held / escrow) — placed high so they're easy to reach during the demo
-  if (p.status === 'held') {
-    html += section('Actions', `
-      <div class="flex flex-wrap items-center gap-2">
-        <label class="text-sm text-slate-600" for="approver">Approver</label>
-        <select id="approver" class="rounded-lg border-slate-300 bg-white py-1.5 pl-3 pr-8 text-sm font-medium text-slate-800 shadow-sm ring-1 ring-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-          <option value="alice">alice (CFO)</option><option value="bob">bob (Ops)</option></select>
-        <button data-act="approve" class="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition">Approve</button>
-        <button data-act="reject" class="rounded-lg bg-white px-4 py-1.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-inset ring-slate-300 hover:bg-slate-50 transition">Reject</button>
-      </div>
-      <p class="mt-2 text-xs text-slate-400">P12: whoever requested the PO can't approve the payment.${p.execute_as === 'escrow' ? ' On approval this runs as escrow.' : ''}</p>`);
-  } else if (p.status === 'escrow_authorised') {
-    const ordered = p.ordered_qty || 0;
-    html += section('Actions', `
-      <div class="flex flex-wrap items-center gap-2">
-        <label class="text-sm text-slate-600" for="qty">Delivered</label>
-        <input id="qty" type="number" min="0" ${ordered ? `max="${ordered}"` : ''} value="${ordered || 0}"
-          class="w-24 rounded-lg border-0 py-1.5 px-3 text-sm font-medium tabular-nums text-slate-800 shadow-sm ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-indigo-500" />
-        <span class="text-sm text-slate-500">of ${ordered || '?'} ordered</span>
-        <button data-act="deliver" class="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition">Simulate delivery</button>
-      </div>
-      <p id="capture-preview" class="mt-2 text-xs text-slate-500"></p>`);
-  }
-
-  // approvals history
-  const approvals = p.approvals || [];
-  if (approvals.length || p.status === 'held' || p.decision === 'hold') {
-    html += section('Approvals', approvals.length ? `<ul class="space-y-2">${approvals.map(a => a.ok ? `
-      <li class="flex items-start gap-2.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm ring-1 ring-inset ring-emerald-200">
-        <span class="mt-px font-bold text-emerald-600">✓</span>
-        <div><span class="font-semibold text-emerald-900">${esc(a.approver)}</span> <span class="text-emerald-800">${esc(a.reason || 'approved')}</span>
-        ${a.at ? `<div class="text-[11px] text-emerald-700/70">${fmtTime(a.at)}</div>` : ''}</div></li>` : `
-      <li class="flex items-start gap-2.5 rounded-lg bg-red-50 px-3 py-2 text-sm ring-1 ring-inset ring-red-200">
-        <span class="mt-px font-bold text-red-600">✗</span>
-        <div><span class="font-semibold text-red-900">${esc(a.approver)}</span> <span class="text-red-800">approval refused</span>
-        <div class="mt-0.5 text-red-700">${esc(a.reason || '')}</div>
-        ${a.at ? `<div class="text-[11px] text-red-700/70">${fmtTime(a.at)}</div>` : ''}</div></li>`).join('')}</ul>`
-      : '<p class="text-sm text-slate-400">No approvals yet.</p>');
-  }
-
-  // 2. rule trace
-  const deciding = new Set(p.deciding_rules || []);
-  const trace = p.trace || [];
-  const firedCount = trace.filter(r => r.fired).length;
-  html += section('Rule trace', `<ol class="space-y-1.5">${trace.map(r => {
-    const col = DECISION_COLOR[r.decision] || '#64748b';
-    const firedCls = r.fired
-      ? { block: 'bg-red-50 ring-red-200', hold: 'bg-amber-50 ring-amber-200', escrow: 'bg-blue-50 ring-blue-200' }[r.decision] || 'bg-slate-50 ring-slate-200'
-      : 'bg-white ring-slate-100';
-    const icon = r.fired
-      ? `<span class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white" style="background:${col}">✗</span>`
-      : `<span class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-emerald-100 text-[11px] font-bold text-emerald-700">✓</span>`;
-    const ev = (r.evidence || []).filter(Boolean);
-    return `<li class="rounded-lg px-3 py-2.5 ring-1 ring-inset ${firedCls}" ${r.fired ? `style="box-shadow: inset 3px 0 0 ${col}"` : ''}>
-      <div class="flex items-start gap-2.5">${icon}
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span class="font-mono text-xs font-bold text-slate-900">${esc(r.rule_id)}</span>
-            <span class="text-sm ${r.fired ? 'font-medium text-slate-900' : 'text-slate-600'}">${esc(r.text)}</span>
-            ${r.fired ? `<span class="ml-auto rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-white" style="background:${col}">${esc(r.decision)}${deciding.has(r.rule_id) ? ' · deciding' : ''}</span>` : ''}
-          </div>
-          ${r.detail ? `<div class="mt-1 font-mono text-[12px] ${r.fired ? 'text-slate-800' : 'text-slate-500'}">${esc(r.detail)}</div>` : ''}
-          ${ev.length ? `<ul class="mt-1.5 space-y-0.5">${ev.map(e => `<li class="flex gap-1.5 text-[11.5px] text-slate-500"><span class="text-slate-300">↳</span><span>${esc(e)}</span></li>`).join('')}</ul>` : ''}
-        </div></div></li>`;
-  }).join('')}</ol>`, `<span class="text-xs text-slate-400">${trace.length} rules · ${firedCount} fired</span>`);
-
-  // 3. agent proposal (untrusted)
-  const injected = hasInjection(inv.body);
-  const srcLabel = prop.source === 'compromised'
-    ? '<span class="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-inset ring-red-200">source: simulated compromised agent</span>'
-    : prop.source === 'llm'
-    ? '<span class="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">source: Claude (LLM)</span>'
-    : '<span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">source: structured fields (no LLM)</span>';
-  const field = (k, v) => `<div><div class="text-[11px] text-slate-400">${k}</div><div class="font-mono text-[13px] font-medium text-slate-800">${v}</div></div>`;
-  html += section('Agent proposal <span class="ml-1 rounded bg-slate-900 px-1.5 py-px text-[10px] tracking-wider text-white">UNTRUSTED</span>', `
-    <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-4">
-      <div class="grid grid-cols-4 gap-3">
-        ${field('invoice', esc(prop.invoice_id || '—'))}${field('vendor', esc(prop.vendor_id || '—'))}
-        ${field('amount', fmtGBP(prop.amount))}${field('PO', esc(prop.po_id || 'none'))}
-      </div>
-      ${prop.reasoning ? `<blockquote class="mt-3 border-l-2 border-slate-300 pl-3 text-sm italic leading-relaxed text-slate-600">“${esc(prop.reasoning)}”</blockquote>` : ''}
-    </div>
-    ${inv.amount != null && prop.amount != null && inv.amount !== prop.amount ? `<div class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">
-        The agent's amount differs from the invoice: invoice says <span class="font-semibold">${fmtGBP(inv.amount)}</span>, agent proposed <span class="font-semibold">${fmtGBP(prop.amount)}</span>. The gate checks the proposal.</div>` : ''}
-    ${injected ? `<div class="mt-3 flex items-start gap-2.5 rounded-xl bg-red-600 px-4 py-3 text-sm text-white shadow-sm">
-        <svg class="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-        <div><div class="font-semibold">This invoice contains instructions to the agent.</div>
-        <div class="mt-0.5 text-red-100">The agent only proposes. The gate checks the proposal against the policy and never reads the invoice text${p.decision === 'block' ? `, so it was blocked by ${[...deciding].join(' and ')}.` : '.'}</div></div></div>` : ''}
-    <details id="raw-invoice" class="group mt-3 rounded-xl ring-1 ring-inset ${injected ? 'ring-red-200' : 'ring-slate-200'}" ${(rawOpen ?? injected) ? 'open' : ''}>
-      <summary class="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-700">
-        <span class="text-slate-400 transition group-open:rotate-90">▸</span>Raw invoice
-        ${injected ? '<span class="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-700 ring-1 ring-inset ring-red-200">⚠ contains instructions to the agent</span>' : ''}
-      </summary>
-      <div class="border-t ${injected ? 'border-red-100' : 'border-slate-100'} px-4 py-3">
-        <div class="mb-2 grid grid-cols-4 gap-3 text-xs">
-          ${field('invoice_id', esc(inv.invoice_id || '—'))}${field('vendor_id', esc(inv.vendor_id || '—'))}
-          ${field('amount', inv.amount != null ? fmtGBP(inv.amount) : '—')}${field('po_id', esc(inv.po_id || '—'))}
-        </div>
-        <div class="text-[11px] text-slate-400">body</div>
-        <pre class="mt-1 whitespace-pre-wrap break-words rounded-lg ${injected ? 'bg-red-50/60' : 'bg-slate-50'} p-3 font-mono text-[12px] leading-relaxed text-slate-800">${inv.body ? highlightInjection(inv.body) : '<span class="text-slate-400">(empty)</span>'}</pre>
-      </div>
-    </details>`);
-
-  // 4. policy guarantees
-  let g;
-  if (prove && proveState(prove) === 'done') {
-    const proved = prove.theorems.filter(t => t.status === 'proved').map(t => t.id);
-    const failing = prove.theorems.filter(t => t.status === 'attack').map(t => t.id);
-    const t1 = prove.theorems.find(t => t.id === 'T1');
-    g = `<p class="text-sm text-slate-700">Checked against policy <span class="font-semibold">${esc(p.policy_version)}</span>
-         <span class="font-mono text-xs text-slate-500">(hash ${esc(p.policy_hash)})</span>.</p>
-      ${proved.length ? `<div class="mt-2 flex flex-wrap items-center gap-1.5"><span class="text-sm text-slate-700">Proved:</span>
-        ${proved.map(id => `<span class="rounded-md bg-emerald-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">✓ ${esc(id)}</span>`).join('')}
-        <span class="text-xs text-slate-400">(up to ${esc(prove.n || 60)} payments / 30 days)</span></div>` : ''}
-      ${failing.length ? `<div class="mt-2 flex flex-wrap items-center gap-1.5"><span class="text-sm text-red-700">Attack found:</span>
-        ${failing.map(id => `<span class="rounded-md bg-red-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-red-700 ring-1 ring-inset ring-red-200">✗ ${esc(id)}</span>`).join('')}
-        <a href="${withMock('/settings')}" class="text-xs font-medium text-red-700 underline">see attacks</a></div>` : ''}
-      ${t1 && t1.status === 'proved' ? `<div class="mt-3 flex items-start gap-2.5 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium leading-snug text-white">
-        <span class="mt-px text-emerald-400">✓</span><span>No sequence of payments this policy allows can move more than ${fmtGBP((Dash.summary && Dash.summary.auto_cap) || 500000)} in 30 days without a human.</span></div>` : ''}`;
-  } else {
-    g = `<p class="text-sm text-slate-700">Checked against policy <span class="font-semibold">${esc(p.policy_version)}</span>
-      <span class="font-mono text-xs text-slate-500">(hash ${esc(p.policy_hash)})</span>.</p>
-      <p class="mt-1.5 flex items-center gap-2 text-sm text-slate-400"><span class="spin inline-block h-3 w-3 rounded-full border-2 border-slate-300 border-t-transparent"></span>Prover running…</p>`;
-  }
-  html += section('Policy guarantees', g);
-
-  // 5. stripe
-  let s;
-  if (p.stripe_pi_id) {
-    const offline = isOfflinePI(p.stripe_pi_id);
-    const url = p.stripe_url || `https://dashboard.stripe.com/test/payments/${p.stripe_pi_id}`;
-    const released = p.status === 'escrow_captured' && p.captured_amount != null ? p.amount - p.captured_amount : null;
-    s = `<dl class="grid grid-cols-[120px_1fr] gap-y-1.5 text-sm">
-        <dt class="text-slate-400">PaymentIntent</dt><dd class="break-all font-mono text-[12.5px] text-slate-800">${esc(p.stripe_pi_id)}${offline ? ' <span class="ml-1 rounded bg-slate-100 px-1.5 py-px font-sans text-[10px] font-semibold text-slate-500">offline</span>' : ''}</dd>
-        <dt class="text-slate-400">Status</dt><dd class="font-mono text-[12.5px] text-slate-800">${esc(p.stripe_status || '—')}</dd>
-        <dt class="text-slate-400">Captured</dt><dd class="font-medium tabular-nums text-slate-800">${p.captured_amount != null ? fmtGBP(p.captured_amount) : (p.status === 'escrow_authorised' ? `<span class="text-blue-700">${fmtGBP(p.amount)} authorised, not captured</span>` : '—')}</dd>
-        ${p.delivered_qty != null ? `<dt class="text-slate-400">Delivery</dt><dd class="text-slate-800">${esc(p.delivered_qty)} of ${esc(p.ordered_qty)} delivered${released != null ? ` · <span class="text-slate-500">${fmtGBP(released)} released</span>` : ''}</dd>` : ''}
-      </dl>
-      ${offline ? '' : `<a href="${esc(url)}" target="_blank" rel="noopener" class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition">Open in Stripe <span aria-hidden="true">↗</span></a>`}`;
-  } else {
-    s = `<p class="text-sm text-slate-400">${p.status === 'blocked' ? 'Blocked: no PaymentIntent was created. No money moved.' : p.status === 'held' ? 'Nothing sent to Stripe until a human approves.' : p.status === 'rejected' ? 'Rejected: no money moved.' : 'No PaymentIntent.'}</p>`;
-  }
-  if (p.stripe_error) s += `<div class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-800 ring-1 ring-inset ring-red-200"><span class="font-semibold">Stripe call failed:</span> <span class="font-mono">${esc(p.stripe_error)}</span></div>`;
-  html += section('Stripe', s);
-
-  // 7. mini map
-  html += section('Policy map', `<div id="mini-map" class="h-[240px] w-full"></div>
-    <p class="mt-1 text-xs text-slate-400">Every payment at (amount, unapproved spend in the 30 days before it). Shading is the active policy.</p>`);
-
-  body.innerHTML = html;
-
-  // restore UI state
-  if (prevApprover && document.getElementById('approver')) document.getElementById('approver').value = prevApprover;
-  const qtyEl = document.getElementById('qty');
-  if (qtyEl) {
-    if (prevQty !== undefined && prevQty !== null && prevQty !== '') qtyEl.value = prevQty;
-    const upd = () => {
-      const q = parseInt(qtyEl.value || '0', 10) || 0;
-      const ordered = p.ordered_qty || 0;
-      const el = document.getElementById('capture-preview');
-      if (!el || !ordered) return;
-      const c = Math.floor(p.amount * Math.min(q, ordered) / ordered);
-      el.innerHTML = q <= 0
-        ? `Nothing delivered → cancel the PaymentIntent, release all ${fmtGBP(p.amount)}.`
-        : `Capture <span class="font-semibold text-slate-800">${fmtGBP(c)}</span> (${fmtGBP(p.amount)} × ${q}/${ordered}); release ${fmtGBP(p.amount - c)}.`;
-    };
-    qtyEl.addEventListener('input', upd);
-    upd();
-  }
-  drawPolicyMap(document.getElementById('mini-map'), {
-    payments: Dash.payments, highlightId: p.id, p8: p8Active(Dash.policy), compact: true,
-    cap: (Dash.summary && Dash.summary.auto_cap) || 500000,
-  });
-}
-
-async function panelAction(act, btn) {
-  const p = Dash.payments.find(x => x.id === Dash.selected);
+async function journalAction(act, id) {
+  const p = J.payments.find(x => x.id === id);
   if (!p) return;
-  btn.disabled = true;
-  btn.classList.add('opacity-60');
+  J.busy.add(id); renderLedger(true);
   try {
     let res;
     if (act === 'approve' || act === 'reject') {
-      const approver = document.getElementById('approver').value;
-      res = await api('POST', `/api/payments/${encodeURIComponent(p.id)}/${act}`, { approver });
-      if (act === 'approve') {
-        const last = (res.approvals || [])[res.approvals.length - 1];
-        if (last && last.ok === false) toast(`Approval refused — ${last.reason || 'P12'}`, 'red');
-        else toast(`Approved by ${approver} → ${STATUS[res.status]?.label || res.status}`, 'green');
-      } else toast(`Rejected by ${approver}`);
+      const approver = J.approver[id] || 'alice';
+      res = await api('POST', `/api/payments/${encodeURIComponent(id)}/${act}`, { approver });
+      const last = (res.approvals || []).slice(-1)[0];
+      if (act === 'approve' && last && !last.ok) toast(approvalSentence(last), 'red');
+      else toast(act === 'approve' ? `Approved by ${approver}` : `Rejected by ${approver}`, act === 'approve' ? 'green' : 'slate');
     } else if (act === 'deliver') {
-      const q = parseInt(document.getElementById('qty').value || '0', 10) || 0;
-      res = await api('POST', '/webhook/delivery', { payment_id: p.id, delivered_qty: q });
-      toast(res.status === 'escrow_captured' ? `Delivered ${q} → captured ${fmtGBP(res.captured_amount)}` : 'Nothing delivered → escrow cancelled', 'green');
+      const q = parseInt(J.qty[id] ?? p.ordered_qty, 10);
+      if (isNaN(q) || q < 0) { toast('Enter a delivered quantity', 'amber'); return; }
+      res = await api('POST', '/webhook/delivery', { payment_id: id, delivered_qty: q });
+      toast(q === 0 ? 'Nothing delivered: escrow cancelled' : `Delivery of ${q} recorded`, 'green');
+      delete J.qty[id];
     }
-    if (res && res.id) {
-      const i = Dash.payments.findIndex(x => x.id === res.id);
-      if (i >= 0) Dash.payments[i] = res;
-      Dash.lastPanelKey = '';
-      renderDash();
-    }
-    dashRefresh();
+    if (res) J.payments = J.payments.map(x => x.id === id ? res : x);
   } catch (e) {
-    toast(e.message || String(e), 'red');
+    toast(e.message, 'red');
   } finally {
-    btn.disabled = false;
-    btn.classList.remove('opacity-60');
+    J.busy.delete(id);
+    renderFilters(); renderLedger(true); renderSide();
   }
 }
 
-function initDashboard() {
-  renderHeader('dash');
-  document.getElementById('chips').addEventListener('click', e => {
+function initJournal() {
+  document.getElementById('filters').addEventListener('click', e => {
     const b = e.target.closest('[data-filter]');
     if (!b) return;
-    Dash.filter = b.dataset.filter;
-    renderChips();
-    renderFeed();
+    J.filter = b.dataset.filter;
+    renderFilters(); renderLedger(true);
   });
-  document.getElementById('feed').addEventListener('click', e => {
-    const tr = e.target.closest('tr[data-id]');
-    if (!tr) return;
-    if (Dash.selected === tr.dataset.id) closePanel(); else openPanel(tr.dataset.id);
+  const ledger = document.getElementById('ledger');
+  ledger.addEventListener('click', e => {
+    const a = e.target.closest('[data-act]');
+    if (a) {
+      const id = a.dataset.id;
+      if (a.dataset.act === 'toggle-passed') { J.showPassed.has(id) ? J.showPassed.delete(id) : J.showPassed.add(id); renderLedger(true); }
+      else if (a.dataset.act === 'toggle-raw') { J.showRaw.add(id); renderLedger(true); }
+      else journalAction(a.dataset.act, id);
+      return;
+    }
+    if (e.target.closest('select, input, a')) return;
+    const t = e.target.closest('[data-toggle]');
+    if (t) {
+      const id = t.dataset.toggle;
+      J.open.has(id) ? J.open.delete(id) : J.open.add(id);
+      renderLedger(true);
+    }
   });
-  document.getElementById('panel-close').addEventListener('click', closePanel);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
-  document.getElementById('panel-body').addEventListener('click', e => {
-    const b = e.target.closest('[data-act]');
-    if (b) panelAction(b.dataset.act, b);
+  ledger.addEventListener('change', e => {
+    if (e.target.dataset.approver) J.approver[e.target.dataset.approver] = e.target.value;
   });
-  dashRefresh();
-  setInterval(dashRefresh, 2000);
+  ledger.addEventListener('input', e => {
+    if (e.target.dataset.qty) J.qty[e.target.dataset.qty] = e.target.value;
+  });
+  journalRefresh();
+  setInterval(journalRefresh, 2000);
 }
 
-if (document.body && document.body.dataset.page === 'dash') initDashboard();
+if (document.body && document.body.dataset.page === 'journal') initJournal();
