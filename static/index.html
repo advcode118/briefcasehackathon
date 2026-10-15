@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Proven · Payments</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: {
+      sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'] } } } };
+  </script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <style type="text/tailwindcss">
+    .tile { @apply rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80; }
+    .tile-label { @apply text-[11px] font-semibold uppercase tracking-wider text-slate-400; }
+    .tile-value { @apply mt-1 text-3xl font-semibold tracking-tight tabular-nums text-slate-900; }
+    .tile-sub { @apply mt-1 text-xs text-slate-400; }
+  </style>
+  <style>
+    body { font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; }
+    @keyframes rowflash {
+      0% { background-color: rgba(99, 102, 241, 0.22); }
+      100% { background-color: rgba(99, 102, 241, 0); }
+    }
+    @keyframes rowin {
+      0% { opacity: 0; transform: translateY(-6px); }
+      100% { opacity: 1; transform: none; }
+    }
+    tr.row-new { animation: rowflash 2.6s ease-out both; }
+    tr.row-new td { animation: rowin 0.45s ease-out both; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.8s linear infinite; }
+    .toast { transition: opacity .4s, transform .4s; }
+    details > summary::-webkit-details-marker { display: none; }
+  </style>
+</head>
+<body data-page="dash" class="min-h-screen bg-slate-50 font-sans text-slate-900">
+  <header id="hdr" class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur"></header>
+  <div id="conn"></div>
+
+  <main class="mx-auto max-w-[1400px] px-6 py-6">
+    <!-- tiles -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
+      <div id="tile-worst" class="rounded-2xl bg-slate-900 p-5 shadow-sm xl:col-span-3"></div>
+      <div id="tile-paid" class="tile xl:col-span-2"></div>
+      <div id="tile-held" class="tile xl:col-span-2"></div>
+      <div id="tile-blocked" class="tile xl:col-span-2"></div>
+      <div id="tile-meter" class="tile sm:col-span-2 xl:col-span-3"></div>
+    </div>
+
+    <!-- feed -->
+    <div class="mt-6 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/80">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900">Payments</h2>
+          <p class="text-xs text-slate-400">The agent proposes; the gate decides. Click a payment for its full trace.</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="chips" class="flex flex-wrap gap-1.5"></div>
+          <span class="flex items-center gap-1.5 text-[11px] font-medium text-slate-400"><span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span></span>live</span>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[820px] text-left">
+          <thead class="bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <tr>
+              <th class="py-2.5 pl-6 pr-3 font-semibold">Time</th>
+              <th class="px-3 py-2.5 font-semibold">Invoice</th>
+              <th class="px-3 py-2.5 font-semibold">Vendor</th>
+              <th class="px-3 py-2.5 text-right font-semibold">Amount</th>
+              <th class="px-3 py-2.5 font-semibold">Decision</th>
+              <th class="px-3 py-2.5 font-semibold">Deciding rules</th>
+              <th class="py-2.5 pl-3 pr-6 font-semibold">Stripe</th>
+            </tr>
+          </thead>
+          <tbody id="feed">
+            <tr><td colspan="7" class="px-6 py-16 text-center text-sm text-slate-400">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- side panel -->
+  <aside id="panel" aria-hidden="true"
+    class="fixed inset-y-0 right-0 z-40 flex w-full max-w-[600px] translate-x-full shadow-none flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-out">
+    <div class="flex items-center justify-between border-b border-slate-100 px-6 py-3">
+      <div class="text-sm font-semibold text-slate-900">Payment trace</div>
+      <button id="panel-close" class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="panel-scroll" class="flex-1 overflow-y-auto"><div id="panel-body"></div></div>
+  </aside>
+
+  <script src="/static/mock.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

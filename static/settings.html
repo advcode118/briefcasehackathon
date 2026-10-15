@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Proven · Policy & proofs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: {
+      sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'] } } } };
+  </script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <style type="text/tailwindcss">
+    .card { @apply rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/80; }
+    .card-h { @apply flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5; }
+    .card-t { @apply text-sm font-semibold text-slate-900; }
+    .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-semibold shadow-sm transition disabled:opacity-50; }
+    .btn-dark { @apply bg-slate-900 text-white hover:bg-slate-700; }
+    .btn-light { @apply bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50; }
+  </style>
+  <style>
+    body { font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.8s linear infinite; }
+    .toast { transition: opacity .4s, transform .4s; }
+  </style>
+</head>
+<body data-page="settings" class="min-h-screen bg-slate-50 font-sans text-slate-900">
+  <header id="hdr" class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur"></header>
+  <div id="conn"></div>
+
+  <main class="mx-auto max-w-[1400px] px-6 py-6">
+    <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h1 class="text-xl font-semibold tracking-tight text-slate-900">Policy & proofs</h1>
+        <p class="mt-0.5 text-sm text-slate-500">The gate enforces this policy. Z3 proves theorems about it, or finds the exact payments that break it.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="day-chip" class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200"></span>
+        <button id="btn-day" class="btn btn-light">Advance day</button>
+        <button id="btn-reset" class="btn btn-light text-red-700">Reset demo</button>
+      </div>
+    </div>
+
+    <!-- version selector -->
+    <div id="versions" class="grid grid-cols-2 gap-3 lg:grid-cols-4"></div>
+
+    <div class="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-12">
+      <!-- left: theorems + worst case -->
+      <div class="space-y-6 xl:col-span-5">
+        <div id="worst" class="rounded-2xl bg-slate-900 p-5 shadow-sm"></div>
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <div class="card-t">Theorems</div>
+              <div id="thm-sub" class="text-xs text-slate-400"></div>
+            </div>
+            <button id="btn-prove" class="btn btn-dark">Run prover</button>
+          </div>
+          <ul id="theorems" class="divide-y divide-slate-100"></ul>
+        </div>
+      </div>
+
+      <!-- right: map -->
+      <div class="xl:col-span-7">
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <div class="card-t">Policy map</div>
+              <div class="text-xs text-slate-400">Each payment at (amount, unapproved spend in the 30 days before it). Shading is the active policy.</div>
+            </div>
+            <div id="attack-chip"></div>
+          </div>
+          <div class="px-3 pb-2 pt-2"><div id="map" class="h-[500px] w-full"></div></div>
+          <div id="attack-box"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- rules -->
+    <div class="card mt-6 overflow-hidden">
+      <div class="card-h">
+        <div>
+          <div class="card-t">Rules</div>
+          <div class="text-xs text-slate-400">Written once in Python against an <span class="font-mono">ops</span> object: the gate runs them on real payments, the prover runs the same code symbolically in Z3.</div>
+        </div>
+        <div id="rules-sub" class="text-xs text-slate-400"></div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[860px] text-left">
+          <thead class="bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <tr><th class="py-2.5 pl-5 pr-3">ID</th><th class="px-3 py-2.5">Rule</th><th class="px-3 py-2.5">Decision</th><th class="px-3 py-2.5">Condition</th><th class="py-2.5 pl-3 pr-5 text-right">In this version</th></tr>
+          </thead>
+          <tbody id="rules"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/mock.js"></script>
+  <script src="/static/app.js"></script>
+  <script src="/static/settings.js"></script>
+</body>
+</html>

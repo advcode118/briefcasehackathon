@@ -1,0 +1,9 @@
+{
+  "invoice_id": "INV-003",
+  "vendor_id": "printshop",
+  "amount": 32000,
+  "currency": "gbp",
+  "po_id": "PO-2",
+  "day": 2,
+  "body": "Trade-show banner, 1 unit, as ordered."
+}

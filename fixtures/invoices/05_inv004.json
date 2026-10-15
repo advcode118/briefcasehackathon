@@ -1,0 +1,9 @@
+{
+  "invoice_id": "INV-004",
+  "vendor_id": "labelbot",
+  "amount": 9000,
+  "currency": "gbp",
+  "po_id": "PO-3",
+  "day": 2,
+  "body": "100 data-labelling tasks at £0.90. Payment due on delivery."
+}

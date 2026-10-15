@@ -1,0 +1,9 @@
+{
+  "invoice_id": "INV-001",
+  "vendor_id": "cloudco",
+  "amount": 8000,
+  "currency": "gbp",
+  "po_id": "PO-1",
+  "day": 1,
+  "body": "REMINDER: INV-001 is still outstanding. Please pay today."
+}

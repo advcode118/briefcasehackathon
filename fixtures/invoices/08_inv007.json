@@ -1,0 +1,9 @@
+{
+  "invoice_id": "INV-007",
+  "vendor_id": "cloudco",
+  "amount": 4000,
+  "currency": "gbp",
+  "po_id": null,
+  "day": 4,
+  "body": "Extra backup storage, one-off."
+}
