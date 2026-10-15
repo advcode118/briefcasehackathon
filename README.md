@@ -1,6 +1,6 @@
-# Proven
+# ProofPay
 
-**A payments agent whose spending policy is proven, not prompted.**
+**A payments agent whose spending policy is proven, not prompted.** (Working name during the build: Proven.)
 Briefcase × Stripe hackathon, Track 1 "Agents that spend".
 
 An invoice arrives at a webhook. A Claude agent reads it and **proposes** a payment. A deterministic **gate** checks the proposal against a written policy and decides whether to pay, escrow, hold for a human, or block. Allowed payments become **Stripe test-mode PaymentIntents**, and escrow uses manual capture with a partial capture on delivery. Every decision stores a **trace**: which rules were checked, with the real numbers plugged in.

@@ -100,6 +100,8 @@ class Ctx:
     po_vendor: dict = field(default_factory=dict)       # po -> vendor
     po_known: dict = field(default_factory=dict)        # po -> True
     vendor_is_agent: dict = field(default_factory=dict) # vendor -> bool
+    po_category: dict = field(default_factory=dict)     # po -> category (str concrete, index symbolic)
+    category: dict = field(default_factory=dict)        # category name -> key used in po_category
     vendor_ids: list = field(default_factory=list)      # symbolic: index -> str id
     po_ids: list = field(default_factory=list)          # symbolic: index -> str id
 
@@ -112,6 +114,8 @@ class Ctx:
             po_vendor={po.id: po.vendor_id for po in seed.POS.values()},
             po_known={po.id: True for po in seed.POS.values()},
             vendor_is_agent={v.id: v.is_agent for v in seed.VENDORS.values()},
+            po_category={po.id: po.category for po in seed.POS.values()},
+            category={c: c for c in seed.CATEGORIES},
         )
 
     @classmethod
@@ -127,6 +131,9 @@ class Ctx:
             po_vendor={i: vi[seed.POS[p].vendor_id] for i, p in enumerate(po_ids)},
             po_known={i: True for i in range(len(po_ids))},
             vendor_is_agent={i: seed.VENDORS[v].is_agent for i, v in enumerate(vendor_ids)},
+            po_category={i: (seed.CATEGORIES.index(seed.POS[p].category) if seed.POS[p].category in seed.CATEGORIES else -1)
+                         for i, p in enumerate(po_ids)},
+            category={c: i for i, c in enumerate(seed.CATEGORIES)},
             vendor_ids=vendor_ids,
             po_ids=po_ids,
         )

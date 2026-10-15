@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import seed
-from .ops import Ctx, Txn
+from .ops import ConcreteOps, Ctx, Txn
 
 
 @dataclass(frozen=True)
@@ -251,6 +251,67 @@ def approval_check(po_id, approver: str) -> dict:
     return {"ok": True, "reason": f"P12 passed: {who}, approved by {approver}"}
 
 
+# ---------------------------------------------------------------- category policies
+
+def _in_cat(txn, cat, ctx, ops):
+    return ops.lookup(txn.po, ctx.po_category, -1 if ops.symbolic else None) == ctx.category[cat]
+
+
+def _cat_single(cat, limit):
+    def fires(p, hist, ctx, ops):
+        return ops.And(_in_cat(p, cat, ctx, ops), p.amount > limit)
+
+    def explain(p, hist, ctx):
+        if not _in_cat(p, cat, ctx, ConcreteOps):
+            return {"detail": f"not a {cat.lower()} payment", "evidence": []}
+        return {"detail": f"{fmt_gbp(p.amount)} {_cmp(p.amount, limit)} {fmt_gbp(limit)}",
+                "evidence": [f"{p.po}: {cat}"]}
+    return fires, explain
+
+
+def _cat_window(cat, cap):
+    def fires(p, hist, ctx, ops):
+        before = ops.Sum([ops.If(ops.And(h.active, h.day > p.day - seed.WINDOW_DAYS, _in_cat(h, cat, ctx, ops)),
+                                 h.amount, 0) for h in hist])
+        return ops.And(_in_cat(p, cat, ctx, ops), before + p.amount > cap)
+
+    def explain(p, hist, ctx):
+        if not _in_cat(p, cat, ctx, ConcreteOps):
+            return {"detail": f"not a {cat.lower()} payment", "evidence": []}
+        hits = [h for h in hist if h.active and h.day > p.day - seed.WINDOW_DAYS and _in_cat(h, cat, ctx, ConcreteOps)]
+        before = sum(h.amount for h in hits)
+        total = before + p.amount
+        return {"detail": (f"{cat.lower()} in the last 30 days {fmt_gbp(before)}; {fmt_gbp(before)} + "
+                           f"{fmt_gbp(p.amount)} = {fmt_gbp(total)} {_cmp(total, cap)} {fmt_gbp(cap)}"),
+                "evidence": _cap_list([_hist_line(h) for h in hits])}
+    return fires, explain
+
+
+CATEGORY_NOTES = {
+    "General": "Applies to every payment.",
+    "AI spend": "AI models, AI agents and AI-assisted services.",
+    "Travel": "Flights, hotels and rail booked through the travel agency.",
+    "Software": "Subscriptions and licences.",
+    "Food & drink": "Catering for client meetings and events.",
+    "Insurance": "Premiums and instalments.",
+}
+
+_CAT_RULES = [
+    ("AI1", "AI spend", "AI spend over £25,000 in 30 days needs approval", "window", 25_000_00),
+    ("TR1", "Travel", "Any single trip over £2,500 needs approval", "single", 2_500_00),
+    ("TR2", "Travel", "Travel over £12,000 in 30 days needs approval", "window", 12_000_00),
+    ("SW1", "Software", "Software invoices over £8,000 need approval", "single", 8_000_00),
+    ("SW2", "Software", "Software spend over £20,000 in 30 days needs approval", "window", 20_000_00),
+    ("FD1", "Food & drink", "Food & drink orders over £1,000 need approval", "single", 1_000_00),
+    ("FD2", "Food & drink", "Food & drink over £3,000 in 30 days needs approval", "window", 3_000_00),
+    ("IN1", "Insurance", "Insurance instalments over £9,900 need approval", "single", 9_900_00),
+    ("IN2", "Insurance", "Insurance over £20,000 in 30 days needs approval", "window", 20_000_00),
+]
+
+# rule id -> category shown on the Policies page
+RULE_CATEGORY = {"P11": "AI spend"}
+
+
 # ---------------------------------------------------------------- registry
 
 RULES: dict[str, Rule] = {r.id: r for r in [
@@ -275,3 +336,12 @@ RULES: dict[str, Rule] = {r.id: r for r in [
     Rule("P12", "Whoever requested the PO can't approve the payment", "approval",
          "at approval: approver ≠ po.requester", p12_fires, p12_explain),
 ]}
+
+for _rid, _cat, _text, _kind, _amt in _CAT_RULES:
+    _f, _e = (_cat_single if _kind == "single" else _cat_window)(_cat, _amt)
+    RULES[_rid] = Rule(_rid, _text, "hold",
+                       (f"category = {_cat} ∧ p.amount > {fmt_gbp(_amt)}" if _kind == "single"
+                        else f"category = {_cat} ∧ Σ(h executed, {_cat}, 30 days) + p.amount > {fmt_gbp(_amt)}"),
+                       _f, _e)
+    RULE_CATEGORY[_rid] = _cat
+CATEGORY_RULE_IDS = [r[0] for r in _CAT_RULES]

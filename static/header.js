@@ -1,4 +1,4 @@
-/* Proven — shared header for Payments and Policies. renderProvenHeader(active, stripeMode). */
+/* ProofPay — shared header for Payments and Policies. renderProvenHeader(active). */
 (function () {
   const css = `
   .pv-hdr { font-family: 'Source Serif 4', Georgia, serif; }
@@ -18,10 +18,9 @@
     const el = document.getElementById('masthead');
     if (!el) return;
     const q = new URLSearchParams(location.search).has('mock') ? '?mock=1' : '';
-    const pill = stripeMode === 'test' ? '<span class="pv-pill">Stripe test mode</span>' : '';
     const html = `<div class="pv-hdr"><div class="pv-row">
-        <div style="padding-bottom:8px"><a class="pv-brand" href="/${q}">Proven</a><span class="pv-tag">proven, not prompted</span></div>
-        <div class="pv-right">${pill}<nav class="pv-nav">
+        <div style="padding-bottom:8px"><a class="pv-brand" href="/${q}">ProofPay</a></div>
+        <div class="pv-right"><nav class="pv-nav">
           <a href="/${q}" class="${active === 'payments' ? 'on' : ''}">Payments</a>
           <a href="/settings${q}" class="${active === 'policies' ? 'on' : ''}">Policies</a></nav></div></div>
       <div class="pv-rule"></div><div class="pv-rule2"></div></div>`;

@@ -35,18 +35,27 @@ VENDORS = {v.id: v for v in [
     Vendor("sterling", "Sterling Expert Witnesses", False),
     Vendor("meridian", "Meridian Office & Print", False),
     Vendor("kestrel", "Kestrel Insurance Brokers", False),
+    Vendor("northbound", "Northbound Travel Management", False),
+    Vendor("larder", "Larder & Co Catering", False),
+    Vendor("brief", "Brief Practice Software", False),
 ]}
 
 POS = {po.id: po for po in [
-    PO("PO-101", "casebase", "knowledge", "Legal research", 12, 10, 4_200_00, "bob"),
+    PO("PO-101", "casebase", "knowledge", "Software", 12, 10, 4_200_00, "bob"),
     PO("PO-102", "northline", "litigation", "eDiscovery", 5, 5, 8_500_00, "bob"),
     PO("PO-103", "harbour", "litigation", "Court reporting", 20, 12, 1_150_00, "alice"),
-    PO("PO-104", "lexa", "corporate", "AI services", 1000, 1000, 9_00, "alice"),
-    PO("PO-105", "aster", "technology", "AI services", 12, 10, 6_200_00, "bob"),
+    PO("PO-104", "lexa", "corporate", "AI spend", 1000, 1000, 9_00, "alice"),
+    PO("PO-105", "aster", "technology", "AI spend", 12, 10, 6_200_00, "bob"),
     PO("PO-106", "sterling", "litigation", "Expert witnesses", 3, 2, 9_500_00, "alice"),
     PO("PO-107", "meridian", "operations", "Office & print", 1, 1, 2_400_00, "alice"),
     PO("PO-108", "kestrel", "finance", "Insurance", 12, 10, 9_800_00, "bob"),
+    PO("PO-109", "northbound", "operations", "Travel", 10, 10, 3_500_00, "bob"),
+    PO("PO-110", "larder", "operations", "Food & drink", 20, 12, 800_00, "bob"),
+    PO("PO-111", "brief", "technology", "Software", 12, 10, 3_900_00, "bob"),
 ]}
+
+# Categories with their own policies (rules.CATEGORY_RULES); other POs fall under "General" only.
+CATEGORIES = ["AI spend", "Travel", "Software", "Food & drink", "Insurance"]
 
 APPROVERS = {"alice": "CFO", "bob": "Ops"}
 

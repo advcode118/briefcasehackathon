@@ -1,0 +1,10 @@
+{
+  "invoice_id": "BPS-1010",
+  "vendor_id": "brief",
+  "amount": 390000,
+  "currency": "gbp",
+  "po_id": "PO-111",
+  "days_ago": 16,
+  "at": "09:40",
+  "body": "Practice management licences — October."
+}

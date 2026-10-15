@@ -51,10 +51,10 @@ class Encoder:
 def _amount(rng):
     r = rng.random()
     if r < 0.5:
-        return rng.randint(1, 100_00)
+        return rng.randint(1, 10_000_00)
     if r < 0.85:
-        return rng.randint(100_00, 600_00)
-    return rng.choice([50_00, 100_00, 500_00, 9000_00, 90, 45_00, 200_00])
+        return rng.randint(10_000_00, 60_000_00)
+    return rng.choice([500_00, 1_000_00, 2_500_00, 5_000_00, 8_000_00, 9_900_00, 10_000_00, 50_000_00, 900_000_00])
 
 
 def _txn(rng, day_hi):
@@ -78,6 +78,9 @@ def _case(rng):
     # bias some histories to the proposal's day / vendor to exercise P7
     p = _txn(rng, day)
     p = Txn(p.invoice, p.vendor, p.amount, p.po, day)
+    if rng.random() < 0.5:  # matching vendor/PO pairs, so allow/escrow and category rules occur
+        po = rng.choice(list(seed.POS))
+        p = Txn(p.invoice, seed.POS[po].vendor_id, rng.randint(1, 10_000_00), po, day)
     for h in hist:
         if rng.random() < 0.3:
             h.day, h.vendor = day, p.vendor
@@ -106,6 +109,8 @@ HANDPICKED = [
      [Txn(f"INV-4{i:02d}", "quickfix", 100_00, None, i % 30, True, True) for i in range(1, 51)]),
     # nothing fires
     (Txn("INV-500", "cloudco", 10_00, "PO-1", 0), []),
+    # AI-agent vendor over the escrow threshold, matching PO
+    (Txn("INV-600", "lexa", 9_000_00, "PO-104", 3), []),
 ]
 
 

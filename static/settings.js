@@ -1,4 +1,4 @@
-/* Proven — Policies page: rules grouped into categories, plus proven guarantees.
+/* ProofPay — Policies page: rules grouped by their API `category`, plus proven guarantees.
  * Self-contained (does not load app.js). Rule and theorem text come from the API. */
 
 const MOCK = new URLSearchParams(location.search).has('mock');
@@ -15,34 +15,23 @@ function esc(s) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const CATEGORIES = [
-  { title: 'Billing integrity', desc: 'Stops duplicate and over-billed invoices.', ids: ['P4', 'P10'] },
-  { title: 'Purchase orders & matters', desc: 'Every payment must trace to an approved purchase order.', ids: ['P9'] },
-  { title: 'Spending limits', desc: 'Caps on single payments, daily vendor totals and unapproved spend.', ids: ['P5', 'P6', 'P7', 'P8'] },
-  { title: 'AI spend', desc: 'Payments to AI agents and AI services.', ids: ['P11'] },
-  { title: 'Segregation of duties', desc: 'Who may approve what.', ids: ['P12'] },
-];
-
-function chip(rule) {
-  if (rule.id === 'P12') return '<span class="chip c-approval">Approval rule</span>';
-  const m = { block: ['c-block', 'Refuse'], hold: ['c-hold', 'Needs approval'], escrow: ['c-escrow', 'Escrow'] }[rule.decision];
-  return m ? `<span class="chip ${m[0]}">${m[1]}</span>` : '';
-}
-
 const S = { policy: null, prove: null, summary: null, err: null };
 
 function render() {
-  renderProvenHeader('policies', S.summary && S.summary.stripe_mode);
+  renderProvenHeader('policies');
   document.getElementById('conn').innerHTML = S.err ? `<div class="err">Cannot reach the server (${esc(S.err)}). Retrying…</div>` : '';
   if (S.policy) {
     const rules = (S.policy.rules || []).filter(r => r.active);
-    const byId = Object.fromEntries(rules.map(r => [r.id, r]));
-    const cards = CATEGORIES.map(c => {
-      const rs = c.ids.map(id => byId[id]).filter(Boolean);
-      if (!rs.length) return '';
-      return `<div class="card"><h3>${esc(c.title)}</h3><p class="desc">${esc(c.desc)}</p>
-        ${rs.map(r => `<div class="rule"><span>${esc(r.text)}</span>${chip(r)}</div>`).join('')}</div>`;
-    }).join('');
+    const groups = new Map(); // insertion order = order categories first appear in the API list
+    for (const r of rules) {
+      const cat = r.category || 'General';
+      if (!groups.has(cat)) groups.set(cat, { note: r.category_note || '', rules: [] });
+      const g = groups.get(cat);
+      if (!g.note && r.category_note) g.note = r.category_note;
+      g.rules.push(r);
+    }
+    const cards = [...groups].map(([title, g]) => `<div class="card"><h3>${esc(title)}</h3>${g.note ? `<p class="desc">${esc(g.note)}</p>` : '<div style="height:10px"></div>'}
+        ${g.rules.map(r => `<div class="rule"><span>${esc(r.text)}</span></div>`).join('')}</div>`).join('');
     document.getElementById('cards').innerHTML = cards || '<div class="empty">No active rules.</div>';
   }
   const ts = ((S.prove && S.prove.theorems) || []).filter(t => t.status === 'proved');

@@ -1,4 +1,4 @@
-/* Proven — shared helpers + dashboard.
+/* ProofPay — shared helpers + dashboard.
  * Plain JS, no build. Money from the API is integer pence. */
 
 // ---------------------------------------------------------------- shared --
@@ -392,7 +392,7 @@ function hasInjection(text) {
 const J = {
   payments: [], summary: null, policy: null, prove: null,
   filter: 'all', open: new Set(), showPassed: new Set(), showRaw: new Set(),
-  approver: {}, qty: {}, busy: new Set(),
+  approver: {}, qty: {}, busy: new Set(), actErr: {},
   seen: null, fresh: new Set(), lastErr: null, lastProveAt: 0,
 };
 
@@ -414,7 +414,10 @@ const RULE_SHORT = {
 const JC = { paid: '#2f6f4f', accepted: '#2f6f4f', refused: '#a3302a', held: '#b8862b', blocked: '#a3302a', rejected: '#8b8373', track: '#ece8dc' };
 
 const PAID_SET = new Set(['paid', 'escrow_authorised', 'escrow_captured']);
-const REFUSED_SET = new Set(['blocked', 'rejected']);
+const REFUSED_SET = new Set(['held', 'blocked', 'rejected']);
+const OVERRIDABLE = new Set(['held', 'blocked']);
+const overrideBy = p => { const a = (p.approvals || []).slice(-1)[0]; return a && a.override ? (a.approver || 'alice') : null; };
+const manualNote = p => { const who = overrideBy(p); return who ? `<div class="text-[12px] italic ink2">approved manually by ${esc(who)}</div>` : ''; };
 const isRefused = p => REFUSED_SET.has(p.status);
 const createdMs = p => { const t = new Date(p.created_at).getTime(); return isNaN(t) ? 0 : t; };
 
@@ -557,14 +560,12 @@ function checkLine(t, p) {
     case 'P12': label = 'Requester cannot approve their own order'; nums = 'checked at approval'; break;
     default: label = t.text || 'Policy check'; nums = '';
   }
-  const verdict = !t.fired ? 'passed' : { block: 'refused', hold: 'flagged', escrow: 'via escrow' }[t.decision] || 'failed';
   const col = !t.fired ? 'green' : t.decision === 'block' ? 'red' : t.decision === 'escrow' ? 'blue' : 'amber';
   const tint = !t.fired ? '' : t.decision === 'block' ? 'bg-[#a3302a]/[0.06]' : t.decision === 'escrow' ? 'bg-[#2f5f8f]/[0.06]' : 'bg-[#b8862b]/[0.08]';
-  return `<div class="grid grid-cols-[18px_1fr_auto] items-baseline gap-x-2 px-2 py-1.5 ${tint}">
+  return `<div class="grid grid-cols-[18px_1fr] items-baseline gap-x-2 px-2 py-1.5 ${tint}">
     <span class="${col} text-center text-[15px]">${t.fired ? (t.decision === 'escrow' ? '◐' : '✗') : '✓'}</span>
     <div><div class="text-[15px] ${t.fired ? 'font-semibold' : ''}">${esc(label)}</div>
-      <div class="text-[13px] italic ink2">${esc(t.text || '')}${nums ? ` <span class="sans not-italic text-[12px]">· ${esc(nums)}</span>` : ''}</div></div>
-    <span class="sans text-[11px] font-semibold uppercase tracking-wider ${col}">${verdict}</span></div>`;
+      <div class="text-[13px] italic ink2">${esc(t.text || '')}${nums ? ` <span class="sans not-italic text-[12px]">· ${esc(nums)}</span>` : ''}</div></div></div>`;
 }
 
 function renderExpansion(p, prove) {
@@ -576,8 +577,18 @@ function renderExpansion(p, prove) {
     <div class="mt-1 divide-y divide-[#e3ddcd] border-y hair">${failed.concat(passed).map(t => checkLine(t, p)).join('')}</div>`;
 
   html += `<div class="mt-4 border-t hair pt-3">`;
-  if (isRefused(p)) html += `<div><span class="font-semibold italic">Status:</span> <span class="red">refused by policy.</span></div>`;
-  else html += `<div><span class="font-semibold italic">Status:</span> <span class="green">accepted.</span>${p.stripe_url ? ` <a class="quiet sans text-[12px]" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">view in Stripe ↗</a>` : ''}</div>`;
+  if (isRefused(p)) {
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="red">refused by policy.</span></div>`;
+    if (OVERRIDABLE.has(p.status)) {
+      const busy = J.busy.has(p.id);
+      html += `<div class="mt-3 flex flex-wrap items-center gap-3"><button data-act="override" data-id="${esc(p.id)}" ${busy ? 'disabled' : ''}
+          class="sans border border-[#1a1a1a] px-3 py-1 text-[13px] font-medium hover:bg-[#1a1a1a] hover:text-[#fdfcf8] disabled:opacity-50 disabled:cursor-wait">${busy ? 'Approving…' : 'Approve manually'}</button>
+        ${J.actErr[p.id] ? `<span class="text-[13px] red">${esc(J.actErr[p.id])}</span>` : ''}</div>`;
+    }
+  } else {
+    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">accepted.</span>${p.stripe_url ? ` <a class="quiet sans text-[12px]" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">view in Stripe ↗</a>` : ''}</div>`;
+    html += manualNote(p);
+  }
   html += `</div>`;
 
   return html;
@@ -603,7 +614,7 @@ function rowHTML(p) {
         <div class="truncate text-[14px] italic ink2">${esc(describe(p))}</div>
         <div class="mt-0.5 text-[14px]">${oneLiner(p)}</div></div>
       <div class="text-right"><div class="text-[17px] font-semibold tnum">${esc(fmtGBP(p.amount))}</div>
-        <div class="text-[13px] italic">${statusWord(p)}</div><div class="text-[12px] italic ink3" data-ago="${esc(p.created_at)}">${esc(relTime(p.created_at))}</div></div>
+        <div class="text-[13px] italic">${statusWord(p)}</div>${manualNote(p)}<div class="text-[12px] italic ink3" data-ago="${esc(p.created_at)}">${esc(relTime(p.created_at))}</div></div>
     </div>
     ${open ? `<div data-exp="${esc(p.id)}" class="fade-in mx-2 mb-5 mt-1 bg-white/60 px-5 py-4 ring-1 ring-[#e3ddcd]">${renderExpansion(p, J.prove)}</div>` : ''}
   </div>`;
@@ -612,7 +623,7 @@ function rowHTML(p) {
 // Key that captures everything a row renders, so unchanged rows are left alone.
 function rowKey(p) {
   return JSON.stringify([p.status, p.approvals?.length, p.captured_amount, p.stripe_status, p.delivered_qty,
-    J.open.has(p.id), J.showPassed.has(p.id), J.showRaw.has(p.id), J.busy.has(p.id), J.fresh.has(p.id),
+    J.open.has(p.id), J.showPassed.has(p.id), J.showRaw.has(p.id), J.busy.has(p.id), J.fresh.has(p.id), J.actErr[p.id] || '',
     J.open.has(p.id) ? (J.prove?.theorems || []).map(t => t.status).join() : '']);
 }
 
@@ -705,9 +716,9 @@ function renderSide() {
   for (const p of J.payments) {
     if (!isRefused(p)) continue;
     for (const t of p.trace || []) {
-      if (!t.fired || t.decision !== 'block') continue;
+      if (!t.fired || (t.decision !== 'block' && t.decision !== 'hold')) continue;
       const l = t.text || 'Policy check';
-      reasons[t.decision][l] = (reasons[t.decision][l] || 0) + 1;
+      reasons.block[l] = (reasons.block[l] || 0) + 1;
     }
   }
   const rgrp = (title, obj, col) => {
@@ -734,7 +745,7 @@ function renderSide() {
 }
 
 function renderMasthead() {
-  renderProvenHeader('payments', (J.summary || {}).stripe_mode);
+  renderProvenHeader('payments');
 }
 
 // ------------------------------------------------------------- refresh --
@@ -771,7 +782,10 @@ async function journalAction(act, id) {
   J.busy.add(id); renderLedger(true);
   try {
     let res;
-    if (act === 'approve' || act === 'reject') {
+    if (act === 'override') {
+      delete J.actErr[id];
+      res = await api('POST', `/api/payments/${encodeURIComponent(id)}/override`, { approver: 'alice' });
+    } else if (act === 'approve' || act === 'reject') {
       const approver = J.approver[id] || 'alice';
       res = await api('POST', `/api/payments/${encodeURIComponent(id)}/${act}`, { approver });
       const last = (res.approvals || []).slice(-1)[0];
@@ -786,7 +800,8 @@ async function journalAction(act, id) {
     }
     if (res) J.payments = J.payments.map(x => x.id === id ? res : x);
   } catch (e) {
-    toast(e.message, 'red');
+    if (act === 'override') J.actErr[id] = e.message || 'Request failed';
+    else toast(e.message, 'red');
   } finally {
     J.busy.delete(id);
     renderFilters(); renderLedger(true); renderSide();

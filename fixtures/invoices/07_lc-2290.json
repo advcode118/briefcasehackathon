@@ -1,0 +1,10 @@
+{
+  "invoice_id": "LC-2290",
+  "vendor_id": "larder",
+  "amount": 64000,
+  "currency": "gbp",
+  "po_id": "PO-110",
+  "days_ago": 20,
+  "at": "18:05",
+  "body": "Client lunch — Atlas strategy meeting (12 covers)."
+}

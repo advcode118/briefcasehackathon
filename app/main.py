@@ -58,7 +58,9 @@ def policy_view() -> dict:
         "versions": [{"id": v, "note": pm.POLICIES[v].note} for v in pm.POLICIES],
         "rules": [
             {"id": r.id, "text": r.text, "decision": r.decision, "condition": r.condition,
-             "active": r.id in pol.rule_ids}
+             "active": r.id in pol.rule_ids,
+             "category": rules.RULE_CATEGORY.get(r.id, "General"),
+             "category_note": rules.CATEGORY_NOTES.get(rules.RULE_CATEGORY.get(r.id, "General"), "")}
             for r in rules.RULES.values()
         ],
     }
@@ -111,7 +113,7 @@ runner = ProverRunner()
 
 
 # T8 compares the active policy with v4, so under v4 it is true by construction; leave it out.
-SHOWN_THEOREMS = ("T1", "T2", "T3", "T5", "T6", "T7")
+SHOWN_THEOREMS = ("T1", "T2", "T3", "T5", "T6")
 
 
 def _theorem_statements() -> dict:
@@ -200,7 +202,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="Proven", lifespan=lifespan)
+app = FastAPI(title="ProofPay", lifespan=lifespan)
 
 if STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -210,7 +212,7 @@ def _page(name: str, title: str):
     path = STATIC / name
     if path.exists():
         return FileResponse(path)
-    return HTMLResponse(f"<!doctype html><title>Proven</title><h1>Proven: {title}</h1>"
+    return HTMLResponse(f"<!doctype html><title>ProofPay</title><h1>ProofPay: {title}</h1>"
                         f"<p>{name} is not built yet. API: <a href='/api/payments'>/api/payments</a>, "
                         f"<a href='/api/policy'>/api/policy</a>, <a href='/api/prove'>/api/prove</a>.</p>")
 
@@ -427,6 +429,23 @@ def approve(payment_id: str, body: dict = Body(default={})):
                 note(p, f"approved by {who}, paid")
             elif p["status"] == "escrow_authorised":
                 note(p, f"approved by {who}, held in escrow")
+        store.save()
+        return p
+
+
+@app.post("/api/payments/{payment_id}/override")
+def override(payment_id: str, body: dict = Body(default={})):
+    """A human pays a payment the policy refused or held. Logged; never counted as auto spend."""
+    who = _approver(body)
+    with store.lock:
+        p = _get(payment_id)
+        if p["status"] not in ("held", "blocked"):
+            raise HTTPException(409, f"payment is {p['status']}, not refused")
+        p["approvals"].append({"approver": who, "ok": True, "override": True, "action": "override",
+                               "reason": f"manual approval by {who} over the policy decision ({p['decision']})",
+                               "at": now_iso()})
+        execute(p, p.get("execute_as") or "allow", auto=False)
+        note(p, f"approved manually by {who}")
         store.save()
         return p
 
