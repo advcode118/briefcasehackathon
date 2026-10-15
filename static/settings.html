@@ -3,203 +3,46 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Proven · Policy & proofs</title>
+  <title>Proven · Policies</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/journal.css" />
   <style>
-    :root {
-      --paper: #fdfcf8; --ink: #1a1a1a; --ink2: #4a4438; --muted: #6b6457; --faint: #8b8373;
-      --rule: #d8d2c2; --rule2: #e3ddcd; --track: #ece8dc;
-      --green: #2f6f4f; --blue: #3c5a8a; --amber: #b8862b; --amber-ink: #9a6f1f; --red: #a3302a;
-      --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-      --sans: Inter, ui-sans-serif, system-ui, sans-serif;
-      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; }
-    body { background: var(--paper); color: var(--ink); font-family: var(--serif); font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
-    a { color: inherit; }
-    button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; }
-    button:disabled { opacity: .5; cursor: default; }
-    .tnum { font-variant-numeric: tabular-nums; }
-    .sans { font-family: var(--sans); }
-    .mono { font-family: var(--mono); }
-    .muted { color: var(--muted); }
-    .faint { color: var(--faint); }
-    .ref { font-family: var(--sans); font-size: 11px; color: var(--faint); letter-spacing: .02em; }
-
-    .wrap { max-width: 1240px; margin: 0 auto; padding: 0 28px; }
-    @media (max-width: 640px) { .wrap { padding: 0 16px; } }
-
-    /* masthead */
-    header.mast { padding-top: 26px; }
-    .mast-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
-    .brand { font-size: 34px; font-weight: 600; letter-spacing: -.01em; text-decoration: none; }
-    .tagline { font-style: italic; color: var(--muted); font-size: 14px; margin-left: 10px; }
-    .mast-meta { font-style: italic; color: var(--muted); font-size: 13px; }
-    nav.tabs { display: flex; gap: 18px; font-family: var(--sans); font-size: 13px; }
-    nav.tabs a { text-decoration: none; color: var(--muted); padding-bottom: 2px; border-bottom: 1px solid transparent; }
-    nav.tabs a.on { color: var(--ink); border-bottom-color: var(--ink); }
-    .double-rule { margin-top: 14px; border-top: 2px solid var(--ink); }
-    .double-rule + .thin { margin-top: 2px; border-top: 1px solid var(--ink); }
-
-    /* section heads */
-    .page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin: 28px 0 18px; }
-    h1 { font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-    .lede { margin: 4px 0 0; font-style: italic; color: var(--ink2); font-size: 15px; max-width: 760px; }
-    h2 { font-size: 20px; font-weight: 600; margin: 0; }
-    h2 .n { color: var(--muted); margin-right: 8px; font-weight: 400; }
-    .sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin-bottom: 10px; }
-    .sec-right { font-style: italic; color: var(--muted); font-size: 13px; }
-    section { margin-top: 36px; }
-
-    /* buttons */
-    .btn { font-family: var(--sans); font-size: 12px; font-weight: 500; padding: 5px 12px; border: 1px solid var(--ink); background: transparent; display: inline-flex; align-items: center; gap: 6px; }
-    .btn:hover:not(:disabled) { background: var(--track); }
-    .btn-ink { background: var(--ink); color: var(--paper); }
-    .btn-ink:hover:not(:disabled) { background: #3a3a3a; }
-    .btn-red { border-color: var(--red); color: var(--red); }
-    .btn-red.on { background: var(--red); color: #fff; }
-    .chip { font-family: var(--sans); font-size: 12px; font-style: normal; color: var(--ink2); border: 1px solid var(--rule); padding: 3px 10px; }
-    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-
-    /* version selector */
-    .versions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
-    @media (max-width: 900px) { .versions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    .ver { text-align: left; padding: 12px 14px; border-left: 1px solid var(--rule); position: relative; }
-    .ver:first-child { border-left: 0; }
-    .ver:hover { background: rgba(26,26,26,.03); }
-    .ver.on { background: var(--ink); color: var(--paper); }
-    .ver .vt { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-    .ver .vname { font-size: 18px; font-weight: 600; }
-    .ver .vstate { font-family: var(--sans); font-size: 10px; text-transform: uppercase; letter-spacing: .14em; color: var(--faint); }
-    .ver.on .vstate { color: #c9c1ae; }
-    .ver .vnote { margin-top: 3px; font-size: 13.5px; font-style: italic; color: var(--ink2); }
-    .ver.on .vnote { color: #d8d2c2; }
-
-    /* grid */
-    .cols { display: grid; grid-template-columns: 5fr 7fr; gap: 40px; }
-    @media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
-
-    /* worst case */
-    .worst { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); padding: 14px 0 12px; }
-    .worst .lbl { font-family: var(--sans); font-size: 10px; text-transform: uppercase; letter-spacing: .15em; color: var(--faint); }
-    .worst .val { font-size: 56px; font-weight: 600; line-height: 1.05; margin-top: 6px; }
-    .worst .val.over { color: var(--red); }
-    .worst .cap { margin-top: 6px; font-size: 14px; font-style: italic; color: var(--ink2); }
-    .worst .src { margin-top: 4px; font-family: var(--sans); font-size: 11px; color: var(--faint); }
-
-    /* theorems */
-    .thm-list { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
-    .thm { display: flex; gap: 12px; align-items: flex-start; padding: 11px 2px; border-bottom: 1px solid var(--rule2); }
-    .thm:last-child { border-bottom: 0; }
-    .thm.showing { background: rgba(163,48,42,.06); }
-    .thm .body { flex: 1; min-width: 0; }
-    .thm .stmt { font-size: 15.5px; line-height: 1.35; }
-    .thm .meta { margin-top: 3px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
-    .st { font-size: 13.5px; font-style: italic; font-weight: 600; }
-    .st.proved { color: var(--green); }
-    .st.attack { color: var(--red); }
-    .st.timeout { color: var(--amber-ink); }
-    .st.error, .st.pending { color: var(--faint); font-weight: 400; }
-    .secs { font-family: var(--sans); font-size: 11px; color: var(--faint); }
-    .thm .why { margin-top: 4px; font-size: 13.5px; color: var(--red); }
-    .thm-empty { padding: 28px 0; text-align: center; font-style: italic; color: var(--muted); }
-    .note { margin-top: 8px; font-size: 12.5px; font-style: italic; color: var(--muted); }
-
-    /* figure */
-    .fig-box { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); }
-    #map { height: 480px; width: 100%; }
-    .caption { margin-top: 8px; font-size: 13.5px; color: var(--ink2); }
-    .caption b { font-weight: 600; color: var(--ink); }
-
-    /* booktabs tables */
-    table.bk { width: 100%; border-collapse: collapse; }
-    table.bk thead th { font-family: var(--sans); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .13em; color: var(--faint); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--ink); }
-    table.bk { border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
-    table.bk td { padding: 9px 10px; vertical-align: top; border-bottom: 1px solid var(--rule2); }
-    table.bk tbody tr:last-child td { border-bottom: 0; }
-    table.bk .r { text-align: right; }
-    table.bk .c { text-align: center; }
-    .rule-text { font-size: 15px; }
-    .rule-off .rule-text { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--rule); }
-    .rule-off .cond, .rule-off .dec { opacity: .45; }
-    .cond { font-family: var(--mono); font-size: 11.5px; color: var(--ink2); }
-    .dec { font-style: italic; font-size: 14px; }
-    .onoff { font-family: var(--sans); font-size: 12px; }
-    .scroll-x { overflow-x: auto; }
-
-    /* attack table */
-    .attack { margin-top: 18px; }
-    .attack h3 { font-size: 16px; font-weight: 600; margin: 0; color: var(--red); }
-    .attack .sub { font-size: 13px; font-style: italic; color: var(--muted); margin: 2px 0 8px; }
-    .attack .scroller { max-height: 280px; overflow-y: auto; }
-    .attack table.bk td { font-family: var(--sans); font-size: 12px; padding: 5px 8px; }
-    .attack table.bk thead th { position: sticky; top: 0; background: var(--paper); padding: 6px 8px; }
-    .over { color: var(--red); font-weight: 600; }
-
-    /* banners, toasts, spinner */
-    .banner { margin-top: 14px; border-top: 1px solid var(--amber); border-bottom: 1px solid var(--amber); padding: 7px 2px; font-style: italic; color: var(--amber-ink); font-size: 14px; }
-    #toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 80; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-    .toast { font-family: var(--sans); font-size: 13px; padding: 8px 14px; background: var(--ink); color: var(--paper); transition: opacity .4s, transform .4s; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
-    .toast.red { background: var(--red); }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spin { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid currentColor; border-top-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
-    footer { margin: 48px 0 32px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 12.5px; font-style: italic; color: var(--faint); }
+    body { font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; line-height: 1.45; }
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 32px 40px; }
+    @media (max-width: 640px) { .wrap { padding: 24px 16px; } }
+    h1 { font-size: 28px; font-weight: 600; margin: 28px 0 4px; letter-spacing: -.01em; }
+    .lede { margin: 0; font-style: italic; color: #4a4438; }
+    h2 { font-size: 21px; font-weight: 600; margin: 36px 0 12px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 20px; }
+    .card { border: 1px solid #d8d2c2; border-radius: 4px; background: #fff; padding: 18px 20px; }
+    .card h3 { font-size: 18px; font-weight: 600; margin: 0; }
+    .card .desc { margin: 2px 0 12px; font-size: 14px; font-style: italic; color: #6b6457; }
+    .rule { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid #ece8dc; }
+    .chip { font-family: Inter, system-ui, sans-serif; font-size: 11px; font-weight: 600; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+    .c-block { background: #f6e7e5; color: #a3302a; } .c-hold { background: #f6eedc; color: #9a6f1f; }
+    .c-escrow { background: #e6ecf5; color: #3c5a8a; } .c-approval { background: #ece8dc; color: #4a4438; }
+    .c-proved { background: #e3efe8; color: #2f6f4f; }
+    .thms { list-style: none; margin: 0; padding: 0; border-top: 2px solid #1a1a1a; border-bottom: 2px solid #1a1a1a; }
+    .thms li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 11px 2px; border-bottom: 1px solid #e3ddcd; font-size: 15.5px; }
+    .thms li:last-child { border-bottom: 0; }
+    .empty { padding: 24px 0; text-align: center; font-style: italic; color: #8b8373; }
+    .err { margin-top: 12px; border: 1px solid rgba(163,48,42,.4); padding: 6px 12px; font-size: 13px; color: #a3302a; }
   </style>
 </head>
 <body data-page="settings">
-  <header class="mast wrap" id="hdr"></header>
-  <div class="wrap" id="conn"></div>
-
-  <main class="wrap">
-    <div class="page-head">
-      <div>
-        <h1>Policy</h1>
-        <p class="lede">The rules every payment is checked against, and the guarantees a theorem prover has verified about them.</p>
-      </div>
-    </div>
-
-    <!-- version selector -->
-    <div id="versions" class="versions"></div>
-
-    <!-- rules -->
-    <section>
-      <div class="sec-head">
-        <h2><span class="n">1.</span>Rules</h2>
-        <div id="rules-sub" class="sec-right"></div>
-      </div>
-      <div class="scroll-x">
-        <table class="bk" style="min-width:820px">
-          <thead><tr><th>Rule</th><th>Decision</th><th>Condition</th><th class="r">In this version</th></tr></thead>
-          <tbody id="rules"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- guarantees -->
-    <section>
-      <div class="sec-head">
-        <h2><span class="n">2.</span>Guarantees</h2>
-      </div>
-      <div id="thm-sub" class="sec-right" style="margin:-4px 0 8px"></div>
-      <ul id="theorems" class="thm-list"></ul>
-      <div id="thm-note" class="note"></div>
-      <div id="attack-box"></div>
-    </section>
-
-    <!-- kept for the script, not shown -->
-    <div hidden>
-      <span id="day-chip"></span><button id="btn-prove"></button><button id="btn-day"></button><button id="btn-reset"></button>
-      <div id="worst"></div><div id="attack-chip"></div><div id="map"></div><div id="map-caption"></div>
-    </div>
-
-    <footer>Proven · proven, not prompted. Payments run in Stripe test mode.</footer>
-  </main>
-
+  <div class="wrap">
+    <header id="masthead"></header>
+    <div id="conn"></div>
+    <h1>Policies</h1>
+    <p class="lede">The rules every payment is checked against, and what has been proven about them.</p>
+    <div id="cards" class="cards"><div class="empty">Loading…</div></div>
+    <h2>Guarantees</h2>
+    <ul id="theorems" class="thms"><li class="empty" style="display:block">Loading…</li></ul>
+  </div>
   <script src="/static/mock.js"></script>
+  <script src="/static/header.js"></script>
   <script src="/static/settings.js"></script>
 </body>
 </html>

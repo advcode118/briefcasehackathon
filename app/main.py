@@ -26,8 +26,8 @@ EXECUTED = {"paid", "escrow_authorised", "escrow_captured"}
 PROVER_N = 60
 
 FALLBACK_THEOREMS = {
-    "T1": "Unapproved spend in 30 days ≤ £5,000",
-    "T2": "No vendor gets > £100 in a day without approval",
+    "T1": "Unapproved spend can never exceed £500,000 in 30 days",
+    "T2": "No vendor can receive over £10,000 in a day without approval",
     "T3": "No invoice is ever paid twice",
     "T5": "Total paid against any PO ≤ received × contract price",
     "T6": "Escrow conserves money",
@@ -302,6 +302,14 @@ def webhook_invoice(payload: dict = Body(...)):
         raise HTTPException(422, "invoice_id and vendor_id are required")
     day = payload.get("day")
     day = int(day) if day is not None else store.day
+    created_at = now_iso()
+    if payload.get("days_ago") is not None:
+        # Demo data: backdate the invoice within the 30-day window (day 29 = today).
+        from datetime import datetime, timedelta, timezone
+        hh, mm = (int(x) for x in str(payload.get("at", "10:00")).split(":"))
+        ts = (datetime.now(timezone.utc) - timedelta(days=int(payload["days_ago"]))).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        created_at = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        day = seed.WINDOW_DAYS - 1 - int(payload["days_ago"])
     invoice = dict(payload, day=day)
 
     proposal = agent.propose(invoice)  # untrusted; may call Claude (outside the lock)
@@ -314,7 +322,7 @@ def webhook_invoice(payload: dict = Body(...)):
         vendor = seed.VENDORS.get(proposal["vendor_id"])
         po = seed.POS.get(proposal.get("po_id") or "")
         p = {
-            "id": store.new_payment_id(), "created_at": now_iso(), "day": day,
+            "id": store.new_payment_id(), "created_at": created_at, "day": day,
             "invoice": invoice, "proposal": proposal,
             "vendor_name": vendor.name if vendor else str(proposal["vendor_id"]),
             "amount": proposal["amount"],

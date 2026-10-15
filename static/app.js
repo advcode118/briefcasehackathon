@@ -411,13 +411,15 @@ const RULE_SHORT = {
   P7: 'Over £100 to one vendor in a day', P8: 'Over the £5,000 30-day cap', P9: 'No matching purchase order',
   P10: 'More than was delivered', P10_naive: 'More than was delivered',
 };
-const JC = { paid: '#2f6f4f', held: '#b8862b', blocked: '#a3302a', rejected: '#8b8373', track: '#ece8dc' };
+const JC = { paid: '#2f6f4f', accepted: '#2f6f4f', refused: '#a3302a', held: '#b8862b', blocked: '#a3302a', rejected: '#8b8373', track: '#ece8dc' };
 
 const PAID_SET = new Set(['paid', 'escrow_authorised', 'escrow_captured']);
-const REVIEW_SET = new Set(['held', 'blocked', 'rejected']);
+const REFUSED_SET = new Set(['blocked', 'rejected']);
+const isRefused = p => REFUSED_SET.has(p.status);
+const createdMs = p => { const t = new Date(p.created_at).getTime(); return isNaN(t) ? 0 : t; };
 
 function jVisible() {
-  return J.payments.filter(p => J.filter === 'all' || (J.filter === 'paid' ? PAID_SET.has(p.status) : REVIEW_SET.has(p.status)));
+  return J.payments.filter(p => J.filter === 'all' || (J.filter === 'refused' ? isRefused(p) : !isRefused(p)));
 }
 
 function vendorShort(p) {
@@ -430,8 +432,13 @@ function relTime(iso) {
   const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
   if (s < 45) return 'just now';
   if (s < 3600) return Math.round(s / 60) + ' min ago';
-  if (s < 86400) return Math.round(s / 3600) + ' h ago';
-  return Math.round(s / 86400) + ' d ago';
+  const hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day0 = new Date(); day0.setHours(0, 0, 0, 0);
+  const days = Math.round((day0 - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (days <= 0) return 'today ' + hm;
+  if (days === 1) return 'yesterday ' + hm;
+  if (days === 2) return '2 d ago';
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 // One line from the invoice body: first meaningful line, minus boilerplate.
@@ -461,8 +468,8 @@ function plainReason(t, p) {
   const vendor = vendorShort(p);
   switch (t.rule_id) {
     case 'P4': return 'Invoice ' + d.replace(/^\S+\s+/, (p.invoice?.invoice_id || '') + ' ') + '.';
-    case 'P5': return `${amt} is over the £500 single-payment limit.`;
-    case 'P6': return `${amt} is over the £100 limit for payments without approval.`;
+    case 'P5': return `${amt}: ${t.text || 'over the single-payment limit'}.`;
+    case 'P6': return `${amt}: ${t.text || 'needs approval'}.`;
     case 'P7': { const x = traceTotal(t); return x ? `${vendor} would receive ${x.total} today — over the ${x.limit} daily limit without approval.` : d; }
     case 'P8': { const x = traceTotal(t); return x ? `Unapproved spend would reach ${x.total} in 30 days — over the ${x.limit} cap.` : d; }
     case 'P9': {
@@ -481,8 +488,8 @@ function plainReason(t, p) {
       const m = new RegExp(`(${MONEY}) > (${MONEY}) \\(received (\\d+)`).exec(d);
       return m ? `${m[1]} is more than the ${m[2]} delivered (${m[3]} received).` : d;
     }
-    case 'P11': return `${vendor} is an AI agent, so payments over £50 go through escrow.`;
-    default: return (t.text ? t.text + ': ' : '') + d;
+    case 'P11': return `${vendor} is an AI agent: ${(t.text || 'paid via escrow').replace(/^./, c => c.toLowerCase())}.`;
+    default: return t.text || '';
   }
 }
 
@@ -516,27 +523,13 @@ function okApprover(p) {
 }
 
 function oneLiner(p) {
-  if (p.status.startsWith('escrow')) return `<span class="italic ink2">${esc(escrowNote(p))}</span>`;
-  if (p.status === 'paid') {
-    const who = okApprover(p);
-    return who ? `<span class="italic ink3">approved by ${esc(who)}</span>` : '';
-  }
-  if (p.status === 'rejected') {
-    const who = okApprover(p) || (p.approvals || []).slice(-1)[0]?.approver;
-    return `<span class="italic ink3">rejected${who ? ' by ' + esc(who) : ''}</span>`;
-  }
-  const f = firedChecks(p)[0];
-  if (!f) return '';
-  return `<span class="${p.status === 'blocked' ? 'red' : 'amber'}">${esc(plainReason(f, p))}</span>`;
+  if (!isRefused(p)) return '';
+  const f = firedChecks(p).filter(t => t.decision === 'block')[0] || firedChecks(p)[0];
+  return f ? `<span class="red">${esc(plainReason(f, p))}</span>` : '';
 }
 
 function statusWord(p) {
-  return {
-    paid: '<span class="green">paid</span>', escrow_authorised: '<span class="green">paid · escrow</span>',
-    escrow_captured: '<span class="green">paid · escrow</span>', escrow_cancelled: '<span class="ink3">escrow cancelled</span>',
-    held: '<span class="amber">awaiting approval</span>', blocked: '<span class="red">refused by policy</span>',
-    rejected: '<span class="ink3">rejected</span>',
-  }[p.status] || esc(p.status);
+  return isRefused(p) ? '<span class="red">refused by policy</span>' : '<span class="green">accepted</span>';
 }
 
 // ---------------------------------------------------- expansion (style) --
@@ -550,8 +543,8 @@ function checkLine(t, p) {
   let label, nums = '';
   switch (t.rule_id) {
     case 'P4': label = 'Invoice not already paid'; nums = t.fired ? d : ''; break;
-    case 'P5': label = 'Single-payment limit'; nums = `${amt} of £500`; break;
-    case 'P6': label = 'Payments without approval'; nums = `${amt} of £100`; break;
+    case 'P5': label = 'Single-payment limit'; nums = amt; break;
+    case 'P6': label = 'Payments without approval'; nums = amt; break;
     case 'P7': label = `Daily limit for ${vendor}`; nums = tot ? `${tot.total} of ${tot.limit}` : ''; break;
     case 'P8': label = '30-day unapproved spend'; nums = tot ? `${tot.total} of ${tot.limit}` : ''; break;
     case 'P9': label = 'Purchase order matches vendor'; nums = d; break;
@@ -560,11 +553,11 @@ function checkLine(t, p) {
       label = `Within what was delivered${p.invoice?.po_id ? ' on ' + p.invoice.po_id : ''}`;
       nums = m ? `${m[1]} of ${m[2]}` : d; break;
     }
-    case 'P11': label = 'AI-agent vendors over £50 use escrow'; nums = t.fired ? `${amt}` : d; break;
+    case 'P11': label = 'AI-agent vendors use escrow'; nums = t.fired ? `${amt}` : d; break;
     case 'P12': label = 'Requester cannot approve their own order'; nums = 'checked at approval'; break;
-    default: label = t.text || t.rule_id; nums = d;
+    default: label = t.text || 'Policy check'; nums = '';
   }
-  const verdict = !t.fired ? 'passed' : { block: 'refused', hold: 'needs approval', escrow: 'paid via escrow' }[t.decision] || 'failed';
+  const verdict = !t.fired ? 'passed' : { block: 'refused', hold: 'flagged', escrow: 'via escrow' }[t.decision] || 'failed';
   const col = !t.fired ? 'green' : t.decision === 'block' ? 'red' : t.decision === 'escrow' ? 'blue' : 'amber';
   const tint = !t.fired ? '' : t.decision === 'block' ? 'bg-[#a3302a]/[0.06]' : t.decision === 'escrow' ? 'bg-[#2f5f8f]/[0.06]' : 'bg-[#b8862b]/[0.08]';
   return `<div class="grid grid-cols-[18px_1fr_auto] items-baseline gap-x-2 px-2 py-1.5 ${tint}">
@@ -582,40 +575,9 @@ function renderExpansion(p, prove) {
   let html = `<div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Policy checks · ${failed.length ? `${failed.length} of ${trace.length} failed` : `all ${trace.length} passed`}</div>
     <div class="mt-1 divide-y divide-[#e3ddcd] border-y hair">${failed.concat(passed).map(t => checkLine(t, p)).join('')}</div>`;
 
-  // status + actions
-  const refusals = (p.approvals || []).filter(a => !a.ok)
-    .map(a => `<div class="text-[14px] red">✗ ${esc(approvalSentence(a))}</div>`).join('');
   html += `<div class="mt-4 border-t hair pt-3">`;
-  if (p.status === 'held') {
-    const sel = J.approver[p.id] || 'alice';
-    const busy = J.busy.has(p.id) ? 'disabled' : '';
-    html += `<div><span class="font-semibold italic">Status:</span> <span class="amber">awaiting approval.</span> <span class="ink2">A human may approve or reject this payment.</span></div>
-      ${refusals ? `<div class="mt-1">${refusals}</div>` : ''}
-      <div class="sans mt-2 flex items-center gap-2">
-        <select data-approver="${esc(p.id)}" class="field">
-          <option value="alice" ${sel === 'alice' ? 'selected' : ''}>alice (CFO)</option>
-          <option value="bob" ${sel === 'bob' ? 'selected' : ''}>bob (Ops)</option></select>
-        <button data-act="approve" data-id="${esc(p.id)}" class="btn-approve" ${busy}>Approve</button>
-        <button data-act="reject" data-id="${esc(p.id)}" class="btn-reject" ${busy}>Reject</button></div>`;
-  } else if (p.status === 'blocked') {
-    html += `<div><span class="font-semibold italic">Status:</span> <span class="red">refused by policy — cannot be approved.</span> <span class="ink2">No human can override a block; the vendor must send a corrected invoice.</span></div>`;
-  } else if (p.status === 'escrow_authorised') {
-    const q = J.qty[p.id] ?? (p.ordered_qty ?? '');
-    const busy = J.busy.has(p.id) ? 'disabled' : '';
-    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">held in escrow.</span> <span class="ink2">Funds are authorised; they are captured in proportion to what is delivered.</span></div>
-      <div class="sans mt-2 flex items-center gap-2 text-[12px]">
-        <span class="ink2">Delivered</span>
-        <input data-qty="${esc(p.id)}" type="number" min="0" ${p.ordered_qty ? `max="${p.ordered_qty}"` : ''} value="${esc(q)}" class="field w-20" />
-        <span class="ink2">of ${esc(p.ordered_qty ?? '?')}</span>
-        <button data-act="deliver" data-id="${esc(p.id)}" class="btn-approve" ${busy}>Record delivery</button></div>`;
-  } else if (p.status === 'rejected') {
-    html += `<div><span class="font-semibold italic">Status:</span> rejected${okApprover(p) ? ' by ' + esc(okApprover(p)) : ''}. No money moved.</div>${refusals ? `<div class="mt-1">${refusals}</div>` : ''}`;
-  } else if (p.status.startsWith('escrow')) {
-    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">${esc(escrowNote(p))}.</span></div>`;
-  } else {
-    const who = okApprover(p);
-    html += `<div><span class="font-semibold italic">Status:</span> <span class="green">paid</span>${who ? ` after approval by ${esc(who)}` : ' automatically: every check passed'}.${p.stripe_url ? ` <a class="quiet sans text-[12px]" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">view in Stripe ↗</a>` : ''}</div>${refusals ? `<div class="mt-1">${refusals}</div>` : ''}`;
-  }
+  if (isRefused(p)) html += `<div><span class="font-semibold italic">Status:</span> <span class="red">refused by policy.</span></div>`;
+  else html += `<div><span class="font-semibold italic">Status:</span> <span class="green">accepted.</span>${p.stripe_url ? ` <a class="quiet sans text-[12px]" href="${esc(p.stripe_url)}" target="_blank" rel="noopener">view in Stripe ↗</a>` : ''}</div>`;
   html += `</div>`;
 
   return html;
@@ -624,13 +586,11 @@ function renderExpansion(p, prove) {
 // -------------------------------------------------------------- ledger --
 
 function renderFilters() {
-  const n = {
-    all: J.payments.length,
-    paid: J.payments.filter(p => PAID_SET.has(p.status)).length,
-    review: J.payments.filter(p => REVIEW_SET.has(p.status)).length,
-  };
-  document.getElementById('filters').innerHTML = `<div class="sans flex border border-[#1a1a1a] text-[12px]">${[['all', 'All'], ['paid', 'Paid'], ['review', 'Needs review']].map(([k, l]) =>
+  const n = { all: J.payments.length, accepted: J.payments.filter(p => !isRefused(p)).length, refused: J.payments.filter(isRefused).length };
+  const html = `<div class="sans flex border border-[#1a1a1a] text-[12px]">${[['all', 'All'], ['accepted', 'Accepted'], ['refused', 'Refused']].map(([k, l]) =>
     `<button data-filter="${k}" class="px-2.5 py-0.5 ${J.filter === k ? 'bg-[#1a1a1a] text-[#fdfcf8]' : ''}">${l} <span class="opacity-60">${n[k]}</span></button>`).join('')}</div>`;
+  const el = document.getElementById('filters');
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
 }
 
 function rowHTML(p) {
@@ -692,17 +652,13 @@ function renderLedger(force) {
 // ------------------------------------------------------------ side column --
 
 function sideStats() {
-  const c = { paid: 0, held: 0, blocked: 0, rejected: 0 };
-  for (const p of J.payments) {
-    if (PAID_SET.has(p.status)) c.paid++;
-    else if (p.status in c) c[p.status]++;
-  }
-  return c;
+  const refused = J.payments.filter(isRefused).length;
+  return { accepted: J.payments.length - refused, refused };
 }
 
 function donutSVG(c, n, size = 150, sw = 20) {
   const r = (size - sw) / 2, C = 2 * Math.PI * r; let off = 0;
-  const segs = n ? ['paid', 'held', 'blocked', 'rejected'].filter(k => c[k]).map(k => {
+  const segs = n ? ['accepted', 'refused'].filter(k => c[k]).map(k => {
     const len = c[k] / n * C;
     const s = `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${JC[k]}" stroke-width="${sw}" stroke-dasharray="${Math.max(len - 2, 1)} ${C - len + 2}" stroke-dashoffset="${-off}"/>`;
     off += len; return s;
@@ -726,7 +682,7 @@ function renderSide() {
   const totalPaid = s.total_paid ?? J.payments.reduce((a, p) => a + effectivePaid(p), 0);
   const cap = s.auto_cap ?? 500000, spent = s.auto_spend_window ?? 0;
   const pct = cap ? Math.min(100, spent / cap * 100) : 0;
-  const legend = [['paid', 'Paid'], ['held', 'Awaiting approval'], ['blocked', 'Refused by policy'], ['rejected', 'Rejected']]
+  const legend = [['accepted', 'Accepted'], ['refused', 'Refused by policy']]
     .map(([k, l]) => `<div class="flex items-center gap-2"><span class="h-2.5 w-2.5" style="background:${JC[k]}"></span><span class="w-36">${l}</span><span class="tnum font-semibold">${c[k]}</span></div>`).join('');
 
   // spending by category (paid, plus pending = awaiting approval)
@@ -735,7 +691,6 @@ function renderSide() {
     const cat = PO_CATEGORY[p.invoice?.po_id] || 'No purchase order';
     cats[cat] = cats[cat] || { paid: 0, pending: 0 };
     cats[cat].paid += effectivePaid(p);
-    if (p.status === 'held') cats[cat].pending += p.amount || 0;
   }
   const catRows = Object.entries(cats).filter(([, v]) => v.paid || v.pending).sort((a, b) => (b[1].paid + b[1].pending) - (a[1].paid + a[1].pending));
   const maxCat = Math.max(1, ...catRows.map(([, v]) => v.paid + v.pending));
@@ -748,10 +703,10 @@ function renderSide() {
   // block reasons (plain English), from fired trace entries of stopped payments
   const reasons = { block: {}, hold: {} };
   for (const p of J.payments) {
-    if (!REVIEW_SET.has(p.status) && p.decision !== 'hold' && p.decision !== 'block') continue;
+    if (!isRefused(p)) continue;
     for (const t of p.trace || []) {
-      if (!t.fired || !(t.decision in reasons)) continue;
-      const l = RULE_SHORT[t.rule_id] || t.text || t.rule_id;
+      if (!t.fired || t.decision !== 'block') continue;
+      const l = t.text || 'Policy check';
       reasons[t.decision][l] = (reasons[t.decision][l] || 0) + 1;
     }
   }
@@ -761,39 +716,25 @@ function renderSide() {
     return `<div class="mt-2 text-[13px] italic ink2">${title}</div>` + rows.map(([l, k]) =>
       `<div class="flex items-center gap-2 border-b hair py-1.5 text-[14px] last:border-b-0"><span class="${col}">●</span><span class="flex-1">${esc(l)}</span><span class="sans tnum font-semibold">${k}</span></div>`).join('');
   };
-  const reasonHTML = (rgrp('Refused by policy', reasons.block, 'red') + rgrp('Held for a human', reasons.hold, 'amber')) || '<div class="py-2 italic ink3 text-[14px]">Nothing stopped yet.</div>';
+  const reasonHTML = rgrp('Refused by policy', reasons.block, 'red') || '<div class="py-2 italic ink3 text-[14px]">Nothing refused yet.</div>';
 
   document.getElementById('side').innerHTML = `
     <section>
-      <div class="mb-3 flex items-baseline justify-between"><h2 class="text-[21px] font-semibold"><span class="ink3 mr-2">2.</span>Stats · Last 30 days</h2>
-        <div class="sans flex border border-[#1a1a1a] text-[11px]" title="visual only"><button class="bg-[#1a1a1a] px-2.5 py-0.5 text-[#fdfcf8]">30d</button><button class="px-2.5 py-0.5">6m</button><button class="px-2.5 py-0.5">1y</button></div></div>
+      <div class="mb-3 flex items-baseline justify-between"><h2 class="text-[21px] font-semibold"><span class="ink3 mr-2">2.</span>Stats · Last 30 days</h2></div>
       <div class="text-[12px] uppercase tracking-[0.15em] ink3 sans">Total paid</div>
       <div class="text-[56px] font-semibold leading-none tnum">${esc(fmtGBP(totalPaid))}</div>
       <div class="mt-4 flex items-center gap-6">${donutSVG(c, n)}<div class="space-y-1.5 text-[14px]">${legend}</div></div>
-      <div class="mt-2 text-[13px] ink2"><b>Fig. 1.</b> Outcomes by count (n = ${n}).</div>
       <div class="mt-5"><div class="sans flex items-baseline justify-between text-[12px] ink2"><span>Unapproved spend vs cap (30 days)</span><span class="tnum">${esc(fmtGBP(spent))} / ${esc(fmtGBP(cap))}</span></div>
         <div class="mt-1 h-1.5 bg-[#ece8dc]"><div class="h-full bg-[#2f6f4f]" style="width:${Math.max(pct, 0.8)}%"></div></div></div>
     </section>
     <div class="grid grid-cols-1 gap-8 sm:grid-cols-2">
-      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">3.</span>Spending breakdown</h2>${spend}
-        <div class="mt-1.5 text-[12px] ink2"><b>Fig. 2.</b> By purchase-order category; amber = awaiting approval.</div></section>
-      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">4.</span>Why payments stopped</h2>${reasonHTML}
-        <div class="mt-1.5 text-[12px] ink2">A payment can fail more than one check.</div></section>
+      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">3.</span>Spending breakdown</h2>${spend}</section>
+      <section><h2 class="mb-2 text-[18px] font-semibold"><span class="ink3 mr-2">4.</span>Why payments were refused</h2>${reasonHTML}</section>
     </div>`;
 }
 
 function renderMasthead() {
-  const s = J.summary || {};
-  const stripe = s.stripe_mode === 'test' ? 'Stripe test mode' : s.stripe_mode === 'offline' ? 'Stripe offline' : 'Stripe …';
-  const agent = s.agent_mode === 'llm' ? 'agent: Claude' : s.agent_mode === 'fallback' ? 'agent: fallback (no LLM)' : 'agent …';
-  document.getElementById('masthead').innerHTML = `<div class="flex flex-wrap items-end justify-between gap-3">
-      <div><div class="text-[34px] font-semibold tracking-tight">Proven</div><div class="text-[14px] italic ink2">proven, not prompted</div></div>
-      <div class="flex flex-wrap items-center gap-2 text-[13px] italic ink2">
-        <span>Accounts payable, Acme Ltd${s.day != null ? ' · day ' + esc(s.day) : ''}</span>
-        <span class="badge sans ${s.stripe_mode === 'test' ? 'blue' : 'ink3'}">${esc(stripe)}</span>
-        <span class="badge sans ${s.agent_mode === 'llm' ? 'green' : 'amber'}">${esc(agent)}</span>
-        <a href="/settings" class="sans not-italic text-[12px] quiet">Settings →</a></div></div>
-    <div class="mt-4 border-t-2 border-[#1a1a1a]"></div><div class="mt-[2px] border-t border-[#1a1a1a]"></div>`;
+  renderProvenHeader('payments', (J.summary || {}).stripe_mode);
 }
 
 // ------------------------------------------------------------- refresh --
@@ -808,7 +749,7 @@ async function journalRefresh() {
         setTimeout(() => { J.fresh.delete(p.id); }, 2700);
       }
     }
-    J.payments = payments; J.summary = summary; J.lastErr = null;
+    J.payments = payments.slice().sort((a, b) => createdMs(b) - createdMs(a)); J.summary = summary; J.lastErr = null;
     if (!J.prove || Date.now() - J.lastProveAt > 10000) {
       J.lastProveAt = Date.now();
       try {

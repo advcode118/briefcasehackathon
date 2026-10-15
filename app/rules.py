@@ -99,8 +99,8 @@ def p4_explain(p, hist, ctx):
 
 # ---------------------------------------------------------------- P5 / P6
 
-MAX_SINGLE = 500_00
-APPROVAL_SINGLE = 100_00
+MAX_SINGLE = 50_000_00
+APPROVAL_SINGLE = 10_000_00
 
 
 def p5_fires(p, hist, ctx, ops):
@@ -123,7 +123,7 @@ def p6_explain(p, hist, ctx):
 
 # ---------------------------------------------------------------- P7
 
-DAILY_VENDOR = 100_00
+DAILY_VENDOR = 10_000_00
 
 
 def p7_fires(p, hist, ctx, ops):
@@ -211,7 +211,7 @@ def p10_naive_explain(p, hist, ctx):
 
 # ---------------------------------------------------------------- P11
 
-ESCROW_OVER = 50_00
+ESCROW_OVER = 5_000_00
 
 
 def p11_fires(p, hist, ctx, ops):
@@ -256,22 +256,22 @@ def approval_check(po_id, approver: str) -> dict:
 RULES: dict[str, Rule] = {r.id: r for r in [
     Rule("P4", "Never pay the same invoice twice", "block",
          "p.invoice_id ∈ {h.invoice_id : h executed ∨ h held}", p4_fires, p4_explain),
-    Rule("P5", "No single payment over £500", "block",
-         "p.amount > £500", p5_fires, p5_explain),
-    Rule("P6", "Payments over £100 need approval", "hold",
-         "p.amount > £100", p6_fires, p6_explain),
-    Rule("P7", "Over £100 to one vendor in one day needs approval", "hold",
-         "Σ(h executed: vendor = p.vendor ∧ day = p.day) + p.amount > £100", p7_fires, p7_explain),
-    Rule("P8", "Unapproved spend capped at £5,000 per 30 days", "hold",
-         "Σ(h executed ∧ auto: day > p.day − 30) + p.amount > £5,000", p8_fires, p8_explain),
+    Rule("P5", "No single payment over £50,000", "block",
+         "p.amount > £50,000", p5_fires, p5_explain),
+    Rule("P6", "Payments over £10,000 need approval", "hold",
+         "p.amount > £10,000", p6_fires, p6_explain),
+    Rule("P7", "Over £10,000 to one vendor in one day needs approval", "hold",
+         "Σ(h executed: vendor = p.vendor ∧ day = p.day) + p.amount > £10,000", p7_fires, p7_explain),
+    Rule("P8", "Unapproved spend capped at £500,000 per 30 days", "hold",
+         "Σ(h executed ∧ auto: day > p.day − 30) + p.amount > £500,000", p8_fires, p8_explain),
     Rule("P9", "Every payment needs a matching purchase order", "hold",
          "p.po missing ∨ unknown ∨ po.vendor ≠ p.vendor", p9_fires, p9_explain),
     Rule("P10", "Never pay more than what arrived, at the contract price", "block",
          "paid_against(po) + p.amount > po.received_qty × po.unit_price", p10_fires, p10_explain),
     Rule("P10_naive", "Never pay more than what arrived (this invoice alone)", "block",
          "p.amount > po.received_qty × po.unit_price", p10_naive_fires, p10_naive_explain),
-    Rule("P11", "Buying from another agent over £50 goes through escrow", "escrow",
-         "vendor.is_agent ∧ p.amount > £50", p11_fires, p11_explain),
+    Rule("P11", "Payments to AI agents over £5,000 go through escrow", "escrow",
+         "vendor.is_agent ∧ p.amount > £5,000", p11_fires, p11_explain),
     Rule("P12", "Whoever requested the PO can't approve the payment", "approval",
          "at approval: approver ≠ po.requester", p12_fires, p12_explain),
 ]}

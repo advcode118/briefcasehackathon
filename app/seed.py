@@ -25,22 +25,30 @@ class PO:
         return self.received_qty * self.unit_price
 
 
+# Demo company: Hale & Whitcombe LLP, a London law firm.
 VENDORS = {v.id: v for v in [
-    Vendor("cloudco", "CloudCo Hosting", False),
-    Vendor("printshop", "PrintShop Ltd", False),
-    Vendor("labelbot", "LabelBot (AI data-labelling agent)", True),
-    Vendor("quickfix", "QuickFix Supplies", False),
+    Vendor("casebase", "Casebase Legal Research", False),
+    Vendor("northline", "Northline eDiscovery", False),
+    Vendor("harbour", "Harbour Court Reporting", False),
+    Vendor("lexa", "Lexa AI (contract-review agent)", True),
+    Vendor("aster", "Aster AI (LLM API)", False),
+    Vendor("sterling", "Sterling Expert Witnesses", False),
+    Vendor("meridian", "Meridian Office & Print", False),
+    Vendor("kestrel", "Kestrel Insurance Brokers", False),
 ]}
 
 POS = {po.id: po for po in [
-    PO("PO-1", "cloudco", "engineering", "hosting", 10, 10, 20_00, "bob"),
-    PO("PO-2", "printshop", "marketing", "print", 1, 1, 320_00, "bob"),
-    PO("PO-3", "labelbot", "engineering", "data", 100, 100, 90, "alice"),
-    PO("PO-4", "printshop", "marketing", "print", 10, 4, 15_00, "alice"),
-    PO("PO-5", "quickfix", "operations", "supplies", 1, 1, 45_00, "alice"),
+    PO("PO-101", "casebase", "knowledge", "Legal research", 12, 10, 4_200_00, "bob"),
+    PO("PO-102", "northline", "litigation", "eDiscovery", 5, 5, 8_500_00, "bob"),
+    PO("PO-103", "harbour", "litigation", "Court reporting", 20, 12, 1_150_00, "alice"),
+    PO("PO-104", "lexa", "corporate", "AI services", 1000, 1000, 9_00, "alice"),
+    PO("PO-105", "aster", "technology", "AI services", 12, 10, 6_200_00, "bob"),
+    PO("PO-106", "sterling", "litigation", "Expert witnesses", 3, 2, 9_500_00, "alice"),
+    PO("PO-107", "meridian", "operations", "Office & print", 1, 1, 2_400_00, "alice"),
+    PO("PO-108", "kestrel", "finance", "Insurance", 12, 10, 9_800_00, "bob"),
 ]}
 
 APPROVERS = {"alice": "CFO", "bob": "Ops"}
 
-AUTO_CAP = 5000_00     # P8 / T1: unapproved spend per 30 days
+AUTO_CAP = 500_000_00     # P8 / T1: unapproved spend per 30 days
 WINDOW_DAYS = 30

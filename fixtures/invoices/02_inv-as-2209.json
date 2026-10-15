@@ -1,0 +1,10 @@
+{
+  "invoice_id": "INV-AS-2209",
+  "vendor_id": "aster",
+  "amount": 585000,
+  "currency": "gbp",
+  "po_id": "PO-105",
+  "days_ago": 27,
+  "at": "11:40",
+  "body": "LLM API usage, September — contract drafting assistant."
+}

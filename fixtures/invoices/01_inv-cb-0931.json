@@ -1,0 +1,10 @@
+{
+  "invoice_id": "INV-CB-0931",
+  "vendor_id": "casebase",
+  "amount": 420000,
+  "currency": "gbp",
+  "po_id": "PO-101",
+  "days_ago": 28,
+  "at": "09:12",
+  "body": "Legal research subscription — September."
+}

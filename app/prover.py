@@ -20,8 +20,8 @@ from .ops import Ctx, Txn, Z3Ops
 BLOCK, HOLD, ESCROW, ALLOW = 3, 2, 1, 0
 SEV_NAME = {0: "allow", 1: "escrow", 2: "hold", 3: "block"}
 
-MAX_AMOUNT = 500_00          # P5: a single payment never exceeds this, so slots range over [1, 500_00]
-DAILY_CAP = 100_00           # T2 / P7
+MAX_AMOUNT = 50_000_00          # P5: a single payment never exceeds this, so slots range over [1, 500_00]
+DAILY_CAP = 10_000_00           # T2 / P7
 DAYS = seed.WINDOW_DAYS      # one 30-day window: day in [0, 29]
 DEFAULT_N = 60               # must stay >= 51 so that N x £100 > £5,000 (PLAN §6.1 bound rule)
 T7_HISTORY = 10              # M history slots for the no-over-blocking theorem
@@ -29,12 +29,12 @@ CHECK_TIMEOUT_MS = 60_000    # per theorem
 OPT_TIMEOUT_MS = 40_000      # worst-case (bounds + witness search + Optimize fallback)
 
 THEOREMS = {
-    "T1": "Unapproved spend in 30 days ≤ £5,000",
-    "T2": "No vendor gets > £100 in a day without approval",
-    "T3": "No invoice is ever paid twice",
-    "T5": "Total paid against any PO ≤ received × contract price",
-    "T6": "Escrow conserves money",
-    "T7": "A valid invoice is always paid automatically (no over-blocking)",
+    "T1": "Unapproved spend can never exceed £500,000 in 30 days",
+    "T2": "No vendor can receive over £10,000 in a day without approval",
+    "T3": "An invoice can never be paid twice",
+    "T5": "Never pays more than what was delivered on a purchase order",
+    "T6": "Escrow never pays out more than was authorised",
+    "T7": "Valid invoices are always paid automatically",
     "T8": "This policy allows nothing the final CFO policy (v4) blocks",
 }
 P0 = ["T1", "T2", "T3", "T5"]
@@ -303,7 +303,7 @@ def _summary(tid: str, pays: list[dict]) -> str:
             groups.setdefault((p["vendor"], p["day"]), []).append(p)
         (v, d), ps = max(groups.items(), key=lambda kv: sum(p["amount"] for p in kv[1]))
         return (f"{gbp(sum(p['amount'] for p in ps))} unapproved to {v} on day {d} via "
-                f"{len(ps)} payments, each ≤ £100")
+                f"{len(ps)} payments, each ≤ £10,000")
     if tid == "T3":
         seen: dict = {}
         for p in pays:
@@ -632,7 +632,7 @@ def worst_case(sm: SlotModel, timeout_ms: int = OPT_TIMEOUT_MS) -> dict:
     step = max(2000, timeout_ms // 3)
     ubs = {}
     if _unsat(sm, [_negation("T1", sm)], step):
-        ubs["T1 (≤ £5,000)"] = seed.AUTO_CAP
+        ubs["T1 (≤ £500,000)"] = seed.AUTO_CAP
     if (_unsat(sm, [_negation("T5", sm)], step)
             and _unsat(sm, [z3.Or([z3.And(t.auto, t.po == ctx.no_po) for t in S])], step)):
         per_po = [z3.Sum([z3.If(z3.And(t.active, t.po == c), t.amount, 0) for t in S]) <= ctx.po_limit[c]
@@ -648,7 +648,7 @@ def worst_case(sm: SlotModel, timeout_ms: int = OPT_TIMEOUT_MS) -> dict:
                 and _valid(per_po + split, total <= lim)):
             ubs["Σ PO limits (T5)"] = lim
     if _unsat(sm, [z3.Or([z3.And(t.auto, t.amount > DAILY_CAP) for t in S])], step):
-        ubs[f"{sm.n} payments × £100"] = sm.n * DAILY_CAP
+        ubs[f"{sm.n} payments × £10,000"] = sm.n * DAILY_CAP
     out = {"status": "timeout", "value": None, "seconds": None, "upper_bound": None, "bound_by": None}
     if ubs:
         by, ub = min(ubs.items(), key=lambda kv: kv[1])
