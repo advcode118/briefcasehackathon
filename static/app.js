@@ -677,11 +677,15 @@ function renderLedger(force) {
       tmp.innerHTML = rowHTML(p);
       const nu = tmp.firstElementChild;
       nu.dataset.key = key;
+      if (el) el.replaceWith(nu); // swap in place; unchanged rows stay attached
       el = nu;
     }
     frag.push(el);
   }
-  box.replaceChildren(...frag);
+  // Re-attaching every row closes open dropdowns and replays animations, so only
+  // rebuild the list when the set or order of rows changed.
+  const current = [...box.children];
+  if (current.length !== frag.length || frag.some((el, i) => current[i] !== el)) box.replaceChildren(...frag);
   box.querySelectorAll('[data-ago]').forEach(e => { e.textContent = relTime(e.dataset.ago); });
 }
 
